@@ -96,7 +96,7 @@ for fi in fold_list:
     if use_pretrained:
         pretrained_convNet = enhancer_predictor_256bp()
         pt_model_name = '{}_seq2activityLog2_leaveChrOut_combinedRS_2bins_bs64_H3K27ac_adamW_erisxdl_r0'.format(cell)
-        checkpoint = torch.load("./trained_models/pretrained_enhancer_encoder/{}_best_{}_checkpoint.pt".format(fold_i, pt_model_name))
+        checkpoint = torch.load("./trained_models/pretrained_enhancer_encoder/{}_best_{}_checkpoint.pt".format(fold_i, pt_model_name), weights_only=False)
         print('Loading pretrained model ...', pt_model_name)
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=pretrained_convNet.encoder, n_enhancer=n_enhancers, out_dim=64, n_extraFeat=n_extraFeat, device=device).to(device)
     else:

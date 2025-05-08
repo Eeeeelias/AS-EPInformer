@@ -110,7 +110,7 @@ class EarlyStopping:
         self.counter = 0
         self.best_score = None
         self.early_stop = False
-        self.val_loss_min = np.Inf
+        self.val_loss_min = np.inf
         self.delta = delta
         self.path = path
 
@@ -275,7 +275,7 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
     # net.load_state_dict(torch.load("./K562_10crx_models/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt"))
     # print("Load the best model from fold_" + str(fold_i) + "_"+model_type+"_"+model_name+"_checkpoint.pt", )
     if saved_model_path is not None:
-        checkpoint = torch.load(saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt")
+        checkpoint = torch.load(saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt", weights_only=False)
         net.load_state_dict(checkpoint['model_state_dict'])
         print(model_name,'loaded!')
         
@@ -302,11 +302,11 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             actual += labels
             ensid_list += eid
 
+
     slope, intercept, r_value, p_value, std_err = stats.linregress(preds, actual)
     peasonr, pvalue = stats.pearsonr(preds, actual)
     mse = mean_squared_error(preds, actual)
     # print(fold %s test sequence: %0.3f' % (fold_i, r_value**2))
-    print('\nPearson R:', peasonr)
     sys.stdout.flush()
     df = pd.DataFrame(index=np.array(ensid_list).flatten())
     df['Pred'] = preds
@@ -320,7 +320,9 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
     return df
 
 class promoter_enhancer_dataset(Dataset):
-    def __init__(self, data_folder = '/content/drive/MyDrive/EPInformer/github/EPInformer/data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1):
+    def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
+                 cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
+                 rna_seq_source='xpresso'):
         self.expr_type = expr_type
         self.cell_type = cell_type
         self.data_folder = data_folder
@@ -331,6 +333,7 @@ class promoter_enhancer_dataset(Dataset):
         self.usePromoterSignal = usePromoterSignal
         self.distance_threshold = distance_threshold
         self.hic_threshold = hic_threshold
+        self.rna_seq_source = rna_seq_source
         if cell_type == 'K562':
             # promoter_df = pd.read_csv('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
             promoter_df = pd.read_csv(self.data_folder + '/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
@@ -343,7 +346,13 @@ class promoter_enhancer_dataset(Dataset):
             promoter_df['PromoterActivity'] = np.sqrt(promoter_df['H3K27ac.RPM.TSS1Kb']*promoter_df['DHS.RPM.TSS1Kb'])
             self.promoter_df = promoter_df 
             self.data_h5 = h5py.File(self.data_folder + '/GM12878_DNase_ENCFF020WZB_2kb_4DNFI1UEG1HD_promoter_enhancer_encoding.h5', 'r')
+
         self.expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18377_gene_expr_fromXpresso.csv', index_col='ENSID')
+        self.present_genes = self.expr_df.index
+        if rna_seq_source == 'epiatlas':
+            self.epiatlas_expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18360_gene_expr_epiatlas.csv', index_col='ENSID')
+            self.present_genes = self.epiatlas_expr_df.index
+        
     def __len__(self):
         return len(self.data_h5['ensid'])
 
@@ -415,9 +424,15 @@ class promoter_enhancer_dataset(Dataset):
         if self.expr_type == 'CAGE':
             cage_expr = np.log10(self.expr_df.loc[sample_ensid][self.cell_type + '_CAGE_128*3_sum']+1)
             expr_tensor = torch.from_numpy(np.array([cage_expr])).float()
-        elif self.expr_type == 'RNA':
+        elif self.expr_type == 'RNA' and self.rna_seq_source == 'xpresso':
             rna_expr = self.expr_df.loc[sample_ensid]['Actual_' + self.cell_type]
+            expr_tensor = torch.from_numpy(np.array([rna_expr])).float()
+        elif self.expr_type == 'RNA' and self.rna_seq_source == 'epiatlas':
+            rna_expr = self.epiatlas_expr_df.loc[sample_ensid][self.cell_type]
             expr_tensor = torch.from_numpy(np.array([rna_expr])).float()
         else:
             assert False, 'label not exists!'
         return pe_code_tensor, rnaFeat_tensor, pe_feat_tensor, expr_tensor, sample_ensid
+
+    def get_valid_genes(self):
+        return self.present_genes
