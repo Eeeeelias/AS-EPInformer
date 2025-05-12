@@ -27,6 +27,17 @@ parser.add_argument('--n_interact_enc',type=int, help='layers of interaction enc
 parser.add_argument('--epochs',type=int, help='training epochs', default=100)
 parser.add_argument('--cuda', help='use cuda', action='store_true')
 parser.add_argument('--use_pretrained_encoder', help='use pretrained sequence encoder', action='store_true')
+parser.add_argument('--rna_seq_source', type=str, help='Which RNA-seq source to use', choices=['xpresso', 'epiatlas'], default='xpresso')
+
+def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
+    """
+    Filter the existing IDs to only include those exist in the data
+    """
+    filtered_train_ids = [i for i in train_ids if i in existing_ids]
+    filtered_valid_ids = [i for i in valid_ids if i in existing_ids]
+    filtered_test_ids = [i for i in test_ids if i in existing_ids]
+    
+    return filtered_train_ids, filtered_valid_ids, filtered_test_ids
 
 # example
 # python train_EPInformer.py --cell K562  --model_type EPInformer-PE-Activity --expr_assay CAGE --use_pretrained_encoder --batch_size 16
@@ -79,10 +90,16 @@ for fi in fold_list:
     valid_ensid = split_df[split_df[fold_i] == 'valid'].index
     test_ensid = split_df[split_df[fold_i] == 'test'].index
 
-    all_ds = utils.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell, n_extraFeat=n_extraFeat, usePromoterSignal=True, n_enhancers=n_enhancers, hic_threshold=hic_threshold, distance_threshold=distance_threshold)
+    all_ds = utils.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell, n_extraFeat=n_extraFeat, 
+                                             usePromoterSignal=True, n_enhancers=n_enhancers, hic_threshold=hic_threshold, 
+                                             distance_threshold=distance_threshold, rna_seq_source=args.rna_seq_source)
+    existing_ensids = all_ds.get_valid_genes()
+
     ensid_list = [eid.decode() for eid in all_ds.data_h5['ensid'][:]]
     ensid_df = pd.DataFrame(ensid_list, columns=['ensid'])
     ensid_df['idx'] = np.arange(len(ensid_list))
+    train_ensid, valid_ensid, test_ensid = filter_id_lists(existing_ensids, train_ensid, valid_ensid, test_ensid)
+
     ensid_df = ensid_df.set_index('ensid')
     train_idx = ensid_df.loc[train_ensid]['idx']
     valid_idx = ensid_df.loc[valid_ensid]['idx']

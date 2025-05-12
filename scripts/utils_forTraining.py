@@ -349,7 +349,7 @@ class promoter_enhancer_dataset(Dataset):
 
         self.expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18377_gene_expr_fromXpresso.csv', index_col='ENSID')
         self.present_genes = self.expr_df.index
-        if rna_seq_source == 'epiatlas':
+        if self.rna_seq_source == 'epiatlas':
             self.epiatlas_expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18360_gene_expr_epiatlas.csv', index_col='ENSID')
             self.present_genes = self.epiatlas_expr_df.index
         
