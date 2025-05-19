@@ -144,7 +144,9 @@ class EarlyStopping:
         # torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
 
-def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, fixed_encoder = False, n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, device = 'cuda', stratify=None, class_weight=None, EPOCHS=100, valid_size=1000):
+def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, fixed_encoder = False, 
+          n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, device = 'cuda', stratify=None, 
+          class_weight=None, EPOCHS=100, valid_size=1000):
     if not os.path.exists(saved_model_path):
         os.mkdir(saved_model_path)
     if valid_dataset is not None:
@@ -168,6 +170,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
                verbose=True, path= saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt")
 
     L_expr = nn.SmoothL1Loss()
+    L_splice = nn.SmoothL1Loss()
     optimizer = torch.optim.AdamW(net.parameters(), lr=learning_rate, weight_decay=1e-6)
     print('Model name:', net.name)
     lrs = []
@@ -196,11 +199,13 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             # elif net_type == 'seq':
             #     pred_expr, _ = net(input_PE)
             # elif net_type == 'seq_feat_dist':
-            pred_expr, _ = net(input_PE, input_feat, input_dist)
+            pred_expr, pred_splice, _ = net(input_PE, input_feat, input_dist)
             loss_expr = L_expr(pred_expr, y_expr)
-            loss_e += loss_expr.item()
+            loss_splice = L_splice(pred_splice, 0) # splicing loss here
+            loss_e += (loss_expr.item() + loss_splice.item()) # possibly add weights later
 
             loss = loss_expr# + loss_intensity + loss_contact
+            loss = loss + loss_splice # make sure this works with backprop
             # propagate the loss backward
             loss.backward()
             # update the gradients
@@ -248,7 +253,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             # input_PEmask = ~(input_PE.sum(-1).sum(-1) > 0).bool().to(device)
             y_expr = y_expr.float().to(device)
             # print(input_P.shape, input_E.shape, input_Emask.shape)
-            pred_expr, _ = net(input_PE, input_feat, input_dist)
+            pred_expr, pred_splice, _ = net(input_PE, input_feat, input_dist)
 
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
@@ -293,7 +298,7 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             # input_PEmask = ~(input_PE.sum(-1).sum(-1) > 0).bool().to(device)
             y_expr = y_expr.float().to(device)
             # print(input_P.shape, input_E.shape, input_Emask.shape)
-            pred_expr, _ = net(input_PE, input_feat, input_dist)
+            pred_expr, pred_splice, _ = net(input_PE, input_feat, input_dist)
 
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
