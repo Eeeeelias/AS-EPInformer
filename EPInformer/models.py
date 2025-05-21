@@ -100,10 +100,9 @@ class MHAttention_encoderLayer(nn.Module):
         )
     # self-attention block
     def _sa_block(self, x, key_padding_mask, attn_mask):
-        x, w = self.self_attn(x, x, x,
-                           key_padding_mask=key_padding_mask, attn_mask=attn_mask)
+        x, w = self.self_attn(x, x, x, key_padding_mask=key_padding_mask, attn_mask=attn_mask)
         return x, w
-        
+         
     def forward(self, x, enhancers_padding_mask=None, attn_mask=None):
         x2 = self.norm1(x)
         x2, attention_w = self._sa_block(x2, key_padding_mask=enhancers_padding_mask, attn_mask=attn_mask)
@@ -166,7 +165,7 @@ class EPInformer_v2(nn.Module):
             self.name = f'EPInformerV2.{base_size}base.{out_dim}dim.{n_encoder}Trans.{head}head.{useBN}BN.{useLN}LN.' \
                         f'{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh'
 
-        if useLN:
+        if useLN: # use layer norm
             self.attn_encoder = get_clones(MHAttention_encoderLayer(d_model=out_dim, nhead=head), self.n_encoder)
         else:
             self.attn_encoder = get_clones(MHAttention_encoderLayer_noLN(d_model=out_dim, nhead=head), self.n_encoder)
@@ -178,7 +177,7 @@ class EPInformer_v2(nn.Module):
         attn_mask.masked_fill(attn_mask, float('-inf'))
         self.attn_mask = attn_mask
         
-        if self.useBN:
+        if self.useBN: # use batch norm
             self.conv_out = nn.Sequential(
                 nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
                 nn.BatchNorm2d(64),
@@ -240,17 +239,19 @@ class EPInformer_v2(nn.Module):
     def forward(self, pe_seq, rna_feat=None, segment_feat=None, extraFeat=None):
         # if enhancers_padding_mask is None:
         enhancers_padding_mask = ~(pe_seq.sum(-1).sum(-1) > 0).bool()
-#         print(enhancers_padding_mask)
+        # print(enhancers_padding_mask)
         pe_embed = self.seq_encoder(pe_seq)
         pe_embed = self.conv_out(pe_embed)
         pe_flatten_embed = torch.flatten(pe_embed.permute(0, 2, 1, 3), start_dim=2)
         if extraFeat is not None:
             pe_flatten_embed = self.add_pos_conv(torch.concat([pe_flatten_embed, extraFeat], axis=-1).permute(0,2,1)).permute(0,2,1) # type: ignore
         attn_list = []
+
         for i in range(self.n_encoder):
             pe_flatten_embed, attn = self.attn_encoder[i](pe_flatten_embed, enhancers_padding_mask=enhancers_padding_mask, 
                                                           attn_mask=self.attn_mask.to(self.device))
             attn_list.append(attn.unsqueeze(0))
+
         p_embed = torch.flatten(pe_flatten_embed[:,0,:], start_dim=1)
         if segment_feat is not None:
             p_embed = torch.cat([p_embed, segment_feat], dim=-1)
