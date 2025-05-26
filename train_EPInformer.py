@@ -21,7 +21,7 @@ parser.add_argument("--fold", type=list_of_strings, help="test fold", default='a
 parser.add_argument("--model_type", type=str, help='EPInformer type', default='EPInformer-PE-Activity', choices=['EPInformer-PE', 'EPInformer-PE-Activity', 'EPInformer-PE-Activity-HiC'])  
 parser.add_argument('--distance_threshold', type=int, help='max distance to TSS', default=100_000) 
 parser.add_argument('--hic_threshold', type=int, help='hic loop thresold', default=-1) 
-parser.add_argument('--expr_assay', type=str, help='expression_assay', choices=['CAGE', 'RNA'])
+parser.add_argument('--expr_assay', type=str, help='expression_assay', choices=['CAGE', 'RNA', 'multi'])
 parser.add_argument('--batch_size', type=int, help='batch size', default=16)
 parser.add_argument('--n_interact_enc',type=int, help='layers of interaction encoder', default=3)
 parser.add_argument('--epochs',type=int, help='training epochs', default=100)
@@ -38,6 +38,23 @@ def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     filtered_test_ids = [i for i in test_ids if i in existing_ids]
     
     return filtered_train_ids, filtered_valid_ids, filtered_test_ids
+
+def create_set_indices(all_ids, train_ratio=0.8, valid_ratio=0.1, test_ratio=0.1, seed=0):
+    """
+    Create train, valid, test indices based on the given ratios
+    """
+    np.random.seed(seed)
+    np.random.shuffle(all_ids)
+    
+    n_total = len(all_ids)
+    n_train = int(n_total * train_ratio)
+    n_valid = int(n_total * valid_ratio)
+    
+    train_ids = all_ids[:n_train]
+    valid_ids = all_ids[n_train:n_train + n_valid]
+    test_ids = all_ids[n_train + n_valid:]
+    
+    return train_ids, valid_ids, test_ids
 
 # example
 # python train_EPInformer.py --cell K562  --model_type EPInformer-PE-Activity --expr_assay CAGE --use_pretrained_encoder --batch_size 16
@@ -85,26 +102,15 @@ else:
 for fi in fold_list:
     print("-"*10, 'fold', fi, '-'*10)
     fold_i = 'fold_' + str(fi)
-
-    train_ensid = split_df[split_df[fold_i] == 'train'].index
-    valid_ensid = split_df[split_df[fold_i] == 'valid'].index
-    test_ensid = split_df[split_df[fold_i] == 'test'].index
+    
+    # removed pre-set indices for train, valid, test since our data is now event-based, not gene-based
 
     all_ds = utils.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell, n_extraFeat=n_extraFeat, 
                                              usePromoterSignal=True, n_enhancers=n_enhancers, hic_threshold=hic_threshold, 
                                              distance_threshold=distance_threshold, rna_seq_source=args.rna_seq_source)
-    existing_ensids = all_ds.get_valid_genes()
-
-    ensid_list = [eid.decode() for eid in all_ds.data_h5['ensid'][:]]
-    ensid_df = pd.DataFrame(ensid_list, columns=['ensid'])
-    ensid_df['idx'] = np.arange(len(ensid_list))
-    train_ensid, valid_ensid, test_ensid = filter_id_lists(existing_ensids, train_ensid, valid_ensid, test_ensid)
-
-    ensid_df = ensid_df.set_index('ensid')
-    train_idx = ensid_df.loc[train_ensid]['idx']
-    valid_idx = ensid_df.loc[valid_ensid]['idx']
-
-    test_idx = ensid_df.loc[test_ensid]['idx']
+    # create train, valid, test indices
+    train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1, 
+                                                        test_ratio=0.1, seed=42+int(fi))
 
     train_ds = Subset(all_ds, train_idx)
     valid_ds = Subset(all_ds, valid_idx)
@@ -114,7 +120,7 @@ for fi in fold_list:
         pretrained_convNet = enhancer_predictor_256bp()
         pt_model_name = '{}_seq2activityLog2_leaveChrOut_combinedRS_2bins_bs64_H3K27ac_adamW_erisxdl_r0'.format(cell)
         checkpoint = torch.load(f"./trained_models/pretrained_enhancer_encoder/{fold_i}_best_{pt_model_name}_checkpoint.pt", 
-                                weights_only=False)
+                                weights_only=False, map_location=device)
         print('Loading pretrained model ...', pt_model_name)
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=pretrained_convNet.encoder, 
                               n_enhancer=n_enhancers, out_dim=64, n_extraFeat=n_extraFeat, device=device).to(device)

@@ -29,6 +29,11 @@ def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
 
+def anti_mse_loss(pred, target, alpha=0.1):
+    mse = (pred - target) ** 2
+    confidence_reward = (pred - 0.5) ** 2
+    return (mse - alpha * confidence_reward).mean()
+
 class Logger():
     """A logging class that can report or save metrics.
 
@@ -149,11 +154,18 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
           class_weight=None, EPOCHS=100, valid_size=1000):
     if not os.path.exists(saved_model_path):
         os.mkdir(saved_model_path)
+    if not os.path.exists(saved_model_path + "/losses.csv"):
+        loss_file = open(saved_model_path + "/losses.csv", "w")
+        loss_file.write("fold,epoch,training_loss,expresssion_loss,splice_loss,validation_mse,validation_r2\n")
+    else:
+        loss_file = open(saved_model_path + "/losses.csv", "a")
+
     if valid_dataset is not None:
         train_ds = training_dataset
         valid_ds = valid_dataset
     else:
-        train_idx, val_idx = train_test_split(list(range(len(training_dataset))), test_size=valid_size, shuffle=True, random_state=66, stratify=stratify)
+        train_idx, val_idx = train_test_split(list(range(len(training_dataset))), test_size=valid_size, 
+                                              shuffle=True, random_state=66, stratify=stratify)
         train_ds = Subset(training_dataset, train_idx)
         valid_ds = Subset(training_dataset, val_idx)
 
@@ -170,7 +182,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
                verbose=True, path= saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt")
 
     L_expr = nn.SmoothL1Loss()
-    L_splice = nn.SmoothL1Loss()
+    L_splice = anti_mse_loss
     optimizer = torch.optim.AdamW(net.parameters(), lr=learning_rate, weight_decay=1e-6)
     print('Model name:', net.name)
     lrs = []
@@ -181,40 +193,41 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         print('learning rate:', get_lr(optimizer))
         running_loss = 0
         loss_e = 0
+        expression_loss = 0
+        splice_loss = 0
         # print('model training mode is:', net.training)
         for data in tqdm(trainloader):
             # print(inputs.size())
             optimizer.zero_grad()
-            input_PE, input_feat, input_dist, y_expr, eid = data
+            input_PE, input_seg, input_feat, input_dist, y_expr, y_psi, eid = data
             input_PE = input_PE.float().to(device)
+
+            input_seg = input_seg.float().to(device)
             input_feat = input_feat.float().to(device)
-            # input_dist = input_dist.long().to(device)
             input_dist = input_dist.float().to(device)
-            # input_PEmask = ~(input_PE.sum(-1).sum(-1) > 0).bool().to(device)
+
             y_expr = y_expr.float().to(device)
-            # print(input_P.shape, input_E.shape, input_Emask.shape)
-            # print(input_dist.shape, input_dist)
-            # if net_type == 'seq_feat':
-            #     pred_expr, _ = net(input_PE, input_feat)
-            # elif net_type == 'seq':
-            #     pred_expr, _ = net(input_PE)
-            # elif net_type == 'seq_feat_dist':
-            pred_expr, pred_splice, _ = net(input_PE, input_feat, input_dist)
+            y_psi = y_psi.float().to(device)
+
+
+            pred_expr, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
+            # check devices for all tensors
             loss_expr = L_expr(pred_expr, y_expr)
-            loss_splice = L_splice(pred_splice, 0) # splicing loss here
+            loss_splice = L_splice(pred_splice, y_psi) # splicing loss here
             loss_e += (loss_expr.item() + loss_splice.item()) # possibly add weights later
+            expression_loss += loss_expr.item()
+            splice_loss += loss_splice.item()
 
             loss = loss_expr# + loss_intensity + loss_contact
-            loss = loss + loss_splice # make sure this works with backprop
+            # loss = loss + loss_splice # make sure this works with backprop
             # propagate the loss backward
             loss.backward()
             # update the gradients
             optimizer.step()
             running_loss += loss.item()
 
-        print('[Epoch %d] loss: %.9f' %
-                      (epoch + 1, running_loss/len(trainloader)))
-        print('Training Loss: expression loss:', loss_e/len(trainloader))
+        print('[Epoch %d] loss: %.9f' % (epoch + 1, running_loss/len(trainloader)))
+        print('Training Loss:', loss_e/len(trainloader))
         # log_cols = ['Epoch', 'Training_Loss', 'Validation_Loss', 'Validation_PearsonR_allGene',
         #             'Validation_R2_allGene', 'Validation_PearsonR_weGene', 'Validation_R2_weGene', 'Saved?']
 
@@ -224,9 +237,13 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         val_pr_wE, val_r2_wE = val_pr_all, val_r2_all
         print('Valdaition R square all:', val_r2_all)
         early_stopping(-val_r2, net, epoch)
+        loss_file.write(f"{fold_i}\t{epoch+1}\t{running_loss/len(trainloader)}\t{expression_loss/len(trainloader)}\t" \
+                        f"{splice_loss/len(trainloader)}\t{val_mse_all}\t{val_r2_all}\n")
+        loss_file.flush()
         if model_logger is not None:
             label_type = net.name.split('.')[-1]
-            model_logger.add([fold_i, epoch, running_loss/len(trainloader), val_mse_all, val_pr_all, val_r2_all, val_pr_wE, val_r2_wE, early_stopping.counter, label_type])
+            model_logger.add([fold_i, epoch, running_loss/len(trainloader), val_mse_all, val_pr_all, val_r2_all, 
+                              val_pr_wE, val_r2_wE, early_stopping.counter, label_type])
             # model_logger.save("./EPInfomrer_log/{}.crossValid.log".format(net.name.replace('.'+label_type, '')))
         if early_stopping.early_stop:
             print("Early stopping")
@@ -237,37 +254,60 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     validloader = data_utils.DataLoader(valid_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     net.eval()
     L_expr = nn.MSELoss()
+    L_psi = nn.MSELoss()
     
     with torch.no_grad():
         preds = []
         actual = []
+        preds_psi = []
+        actual_psi = []
         loss_e = 0
         for data in validloader:
             # print(inputs.size())
-            input_PE, input_feat, input_dist, y_expr, eid = data
+            input_PE, input_seg, input_feat, input_dist, y_expr, y_psi, eid = data
             input_PE = input_PE.float().to(device)
+            input_seg = input_seg.float().to(device)
             input_feat = input_feat.float().to(device)
             # input_dist = input_dist.long().to(device)
             input_dist = input_dist.float().to(device)
             # print(input_dist.shape, input_dist)
             # input_PEmask = ~(input_PE.sum(-1).sum(-1) > 0).bool().to(device)
             y_expr = y_expr.float().to(device)
+            y_psi = y_psi.float().to(device)
             # print(input_P.shape, input_E.shape, input_Emask.shape)
-            pred_expr, pred_splice, _ = net(input_PE, input_feat, input_dist)
+            pred_expr, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
 
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
 
+            outputs_psi = list(pred_splice.flatten().cpu().detach().numpy())
+            labels_psi = list(y_psi.flatten().cpu().detach().numpy())
+
             loss_expr = L_expr(pred_expr, y_expr)
-            loss_e += loss_expr.item()
+            loss_splice = L_psi(pred_splice, y_psi)
+            # loss_e += loss_expr.item() + loss_splice.item()
+
             preds += outputs
             actual += labels
+            preds_psi += outputs_psi
+            actual_psi += labels_psi
 
     slope, intercept, r_value, p_value, std_err = stats.linregress(preds, actual)
     peasonr, pvalue = stats.pearsonr(preds, actual)
     mse = mean_squared_error(preds, actual)
-    print('Validation loss expression loss:', loss_e/len(validloader))
-    print("valid: mse", mse, "R_sqaure", r_value**2, 'peasonr', peasonr)
+    print("### Validation ### TPM expresion ###")
+    print('### Loss:', loss_expr.item()/len(validloader))
+    print("### MSE:", mse, "R²:", r_value**2, 'PeasonR:', peasonr)
+    print("###"*20, "\n")
+
+    slope, intercept, r_value_psi, p_value, std_err = stats.linregress(preds_psi, actual_psi)
+    peasonr_psi, pvalue = stats.pearsonr(preds_psi, actual_psi)
+    mse_psi = mean_squared_error(preds_psi, actual_psi)
+    print("### Validation ### PSI expression ###")
+    print('### Loss:', loss_splice.item()/len(validloader))
+    print("### MSE:", mse_psi, "R²:", r_value_psi**2, 'PeasonR:', peasonr_psi)
+    print("###"*20)
+
     return mse, r_value**2, peasonr
 
 def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_size=64, device = 'cuda', model_type='best'):
@@ -288,20 +328,31 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
     with torch.no_grad():
         preds = []
         actual = []
+        preds_psi = []
+        actual_psi = []
+
         ensid_list = []
         for data in tqdm(testloader):
-            input_PE, input_feat, input_dist, y_expr, eid = data
+            input_PE, input_seg, input_feat, input_dist, y_expr, y_psi, eid = data
             input_PE = input_PE.float().to(device)
+            input_seg = input_seg.float().to(device)
             input_feat = input_feat.float().to(device)
             # input_dist = input_dist.long().to(device)
             input_dist = input_dist.float().to(device)
             # input_PEmask = ~(input_PE.sum(-1).sum(-1) > 0).bool().to(device)
             y_expr = y_expr.float().to(device)
+            y_psi = y_psi.float().to(device)
             # print(input_P.shape, input_E.shape, input_Emask.shape)
-            pred_expr, pred_splice, _ = net(input_PE, input_feat, input_dist)
+            pred_expr, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
 
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
+
+            outputs_psi = list(pred_splice.flatten().cpu().detach().numpy())
+            labels_psi = list(y_psi.flatten().cpu().detach().numpy())
+
+            preds_psi += outputs_psi
+            actual_psi += labels_psi
 
             preds += outputs
             actual += labels
@@ -314,12 +365,12 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
     # print(fold %s test sequence: %0.3f' % (fold_i, r_value**2))
     sys.stdout.flush()
     df = pd.DataFrame(index=np.array(ensid_list).flatten())
-    df['Pred'] = preds
-    df['actual'] = actual
+    df['PredExpr'] = preds
+    df['ActualExpr'] = actual
+    df['PredPsi'] = preds_psi
+    df['ActualPsi'] = actual_psi
     df['fold_idx'] = fold_i
 
-    pearsonr_we, pvalue = stats.pearsonr(df['Pred'], df['actual'])
-    print('PearsonR:', pearsonr_we)
     if saved_model_path is not None:
         df.to_csv(saved_model_path + "/fold_" + str(fold_i) + "_"+ model_name + "_predictions.csv")
     return df
@@ -339,6 +390,9 @@ class promoter_enhancer_dataset(Dataset):
         self.distance_threshold = distance_threshold
         self.hic_threshold = hic_threshold
         self.rna_seq_source = rna_seq_source
+        self.gene_sequences = h5py.File(self.data_folder + '/event_sequences.h5', 'r')
+        self.event_keys = list(self.gene_sequences.keys())
+        self.psi_response = pd.read_csv(self.data_folder + '/psi_response.csv', index_col=1)
         if cell_type == 'K562':
             # promoter_df = pd.read_csv('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
             promoter_df = pd.read_csv(self.data_folder + '/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
@@ -354,20 +408,45 @@ class promoter_enhancer_dataset(Dataset):
 
         self.expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18377_gene_expr_fromXpresso.csv', index_col='ENSID')
         self.present_genes = self.expr_df.index
+        self.valid_events = self.get_valid_genes()
         if self.rna_seq_source == 'epiatlas':
             self.epiatlas_expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18360_gene_expr_epiatlas.csv', index_col='ENSID')
             self.present_genes = self.epiatlas_expr_df.index
         
-    def __len__(self):
-        return len(self.data_h5['ensid'])
+    def __len__(self): # changed to filter for events 
+        return len(self.valid_events)
 
     def __getitem__(self, idx):
+        event = self.valid_events[idx]
+        gene_id = event.split(";")[0]
+        # find idx where gene_id is in the data_h5
+        idx = np.where(self.data_h5['ensid'][:] == gene_id.encode())[0][0]
+
         sample_ensid = self.data_h5['ensid'][idx].decode()
         seq_code = self.data_h5['pe_code'][idx]
         enhancer_distance = self.data_h5['distance'][idx,1:]
         enhancer_intensity = self.data_h5['activity'][idx,1:]
         enhancer_contact = self.data_h5['hic'][idx,1:]
 
+        # added exon & intron sequences
+        upstream, downstream, exon = None, None, None
+        sequences = self.gene_sequences[event]
+        for key in sequences.keys():
+            if 'upstream' in key:
+                upstream = sequences[key][()].decode()
+                upstream = upstream[-1024:]
+            elif 'downstream' in key:
+                downstream = sequences[key][()].decode()
+                downstream = downstream[:1024]
+            elif 'exon' in key:
+                exon = sequences[key][()].decode()
+                exon = exon[:1024]
+        
+        # one hot encode the sequences
+        vocab = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
+        segment_tensor = torch.stack([self.one_hot_encode(upstream, vocab), self.one_hot_encode(exon, vocab), 
+                                       self.one_hot_encode(downstream, vocab)])
+        
         if self.signal_type == 'H3K27ac':
             promoter_activity = self.promoter_df.loc[sample_ensid]['PromoterActivity']
         elif self.signal_type == 'DNase':
@@ -376,7 +455,9 @@ class promoter_enhancer_dataset(Dataset):
         promoter_code = seq_code[:1]
         enhancers_code = seq_code[1:]
 
-        rnaFeat = list(self.expr_df.loc[sample_ensid][['UTR5LEN_log10zscore','CDSLEN_log10zscore','INTRONLEN_log10zscore','UTR3LEN_log10zscore','UTR5GC','CDSGC','UTR3GC', 'ORFEXONDENSITY']].values.astype(float))
+        rnaFeat = list(self.expr_df.loc[sample_ensid][['UTR5LEN_log10zscore','CDSLEN_log10zscore',
+                                                       'INTRONLEN_log10zscore','UTR3LEN_log10zscore','UTR5GC','CDSGC',
+                                                       'UTR3GC', 'ORFEXONDENSITY']].values.astype(float))
         pe_activity = np.concatenate([[0], enhancer_intensity]).flatten()
 
         if self.usePromoterSignal and self.n_extraFeat > 1:
@@ -425,6 +506,7 @@ class promoter_enhancer_dataset(Dataset):
         pe_code_tensor = torch.concat([promoter_code_tensor, enhancers_code_tensor])
         rnaFeat_tensor = torch.from_numpy(rnaFeat).float()
         # print(pe_distance_tensor)
+        psi_tensor = 0
 
         if self.expr_type == 'CAGE':
             cage_expr = np.log10(self.expr_df.loc[sample_ensid][self.cell_type + '_CAGE_128*3_sum']+1)
@@ -435,9 +517,28 @@ class promoter_enhancer_dataset(Dataset):
         elif self.expr_type == 'RNA' and self.rna_seq_source == 'epiatlas':
             rna_expr = self.epiatlas_expr_df.loc[sample_ensid][self.cell_type]
             expr_tensor = torch.from_numpy(np.array([rna_expr])).float()
+        elif self.expr_type == 'multi':
+            event_expr = self.psi_response.loc[event]
+            expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_gene_level_tpm'])).float() # should be summed_TPM
+            psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi'])).float()
         else:
-            assert False, 'label not exists!'
-        return pe_code_tensor, rnaFeat_tensor, pe_feat_tensor, expr_tensor, sample_ensid
+            assert False, 'Label does not exist!'
+        
+        return pe_code_tensor, segment_tensor, rnaFeat_tensor, pe_feat_tensor, expr_tensor, psi_tensor, sample_ensid
 
     def get_valid_genes(self):
-        return self.present_genes
+        gene_ids = [x.split(";")[0] for x in self.event_keys]
+        ensid_list = set([x.decode() for x in self.data_h5['ensid'][:]])
+        found_gene_ids = set([x for x in gene_ids if x in ensid_list])
+        return [x for x in self.event_keys if x.split(";")[0] in found_gene_ids]
+
+    def one_hot_encode(self, seq, vocab, length=1024):
+        indices = [vocab[item] for item in seq]
+        tensor = torch.tensor(indices)
+        one_hot = torch.nn.functional.one_hot(tensor, num_classes=len(vocab)).float()
+        # add padding
+        if len(seq) < length:
+            one_hot = torch.cat([one_hot, torch.zeros(length - len(seq), 4)], dim=0)
+        elif len(seq) > length:
+            one_hot = one_hot[:length]
+        return one_hot

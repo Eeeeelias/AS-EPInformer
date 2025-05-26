@@ -164,13 +164,15 @@ class EPInformer_v2(nn.Module):
             self.seq_encoder = seq_256bp_encoder(base_size=base_size)
             self.name = f'EPInformerV2.{base_size}base.{out_dim}dim.{n_encoder}Trans.{head}head.{useBN}BN.{useLN}LN.' \
                         f'{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh'
+        
+        self.segment_encoder = seq_256bp_encoder(base_size=base_size)
 
         if useLN: # use layer norm
             self.attn_encoder = get_clones(MHAttention_encoderLayer(d_model=out_dim, nhead=head), self.n_encoder)
         else:
             self.attn_encoder = get_clones(MHAttention_encoderLayer_noLN(d_model=out_dim, nhead=head), self.n_encoder)
        
-        attn_mask = (~np.identity(self.n_enhancer+1).astype(bool))
+        attn_mask = (~np.identity(self.n_enhancer+4).astype(bool)) # changed +1 to +4 to account for the exon segments
         attn_mask[:, 0] = False
         attn_mask[0, :] = False
         attn_mask = torch.from_numpy(attn_mask)
@@ -193,6 +195,22 @@ class EPInformer_v2(nn.Module):
                 nn.ELU(),
                 nn.Linear(101, int(self.out_dim/32)), 
                  # nn.Linear(38, 8), # 2kb nn.Linear(101, 8)
+                nn.ELU(),
+            )
+            self.segment_conv_out = nn.Sequential(
+                nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
+                nn.BatchNorm2d(64),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 4)),
+                nn.BatchNorm2d(64),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 6)),
+                nn.BatchNorm2d(64),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=32, kernel_size=(1, 1)),
+                nn.BatchNorm2d(32),
+                nn.ELU(),
+                nn.Linear(40, int(self.out_dim/32)), # added 40 to account for the segment length
                 nn.ELU(),
             )
         else:
@@ -227,7 +245,6 @@ class EPInformer_v2(nn.Module):
             nn.Linear(128, 128),
             nn.ReLU(),
             nn.Linear(128, 1),
-            nn.Sigmoid(), # maybe take that out later
         )
         self.add_pos_conv = nn.Sequential(
                 nn.Conv1d(in_channels = self.out_dim+n_extraFeat, out_channels=self.out_dim, kernel_size=1),
@@ -236,14 +253,23 @@ class EPInformer_v2(nn.Module):
                 nn.ReLU(),
         )
 
-    def forward(self, pe_seq, rna_feat=None, segment_feat=None, extraFeat=None):
+    def forward(self, pe_seq, exon_seq, rna_feat=None, extraFeat=None):
         # if enhancers_padding_mask is None:
         enhancers_padding_mask = ~(pe_seq.sum(-1).sum(-1) > 0).bool()
-        # print(enhancers_padding_mask)
+        exon_padding_mask = ~(exon_seq.sum(-1).sum(-1) > 0).bool() # added padding mask for segments and combined
+        enhancers_padding_mask = torch.concat([enhancers_padding_mask, exon_padding_mask], dim=1)
         pe_embed = self.seq_encoder(pe_seq)
         pe_embed = self.conv_out(pe_embed)
+
+        exon_embed = self.segment_encoder(exon_seq)
+        exon_embed = self.segment_conv_out(exon_embed)
         pe_flatten_embed = torch.flatten(pe_embed.permute(0, 2, 1, 3), start_dim=2)
+        exon_flatten_embed = torch.flatten(exon_embed.permute(0, 2, 1, 3), start_dim=2)
+        pe_flatten_embed = torch.concat([pe_flatten_embed, exon_flatten_embed], dim=1)
+
         if extraFeat is not None:
+            # fill extraFeat with zeros on dim 1
+            extraFeat = F.pad(extraFeat, pad=(0,0,0,3))
             pe_flatten_embed = self.add_pos_conv(torch.concat([pe_flatten_embed, extraFeat], axis=-1).permute(0,2,1)).permute(0,2,1) # type: ignore
         attn_list = []
 
@@ -253,8 +279,6 @@ class EPInformer_v2(nn.Module):
             attn_list.append(attn.unsqueeze(0))
 
         p_embed = torch.flatten(pe_flatten_embed[:,0,:], start_dim=1)
-        if segment_feat is not None:
-            p_embed = torch.cat([p_embed, segment_feat], dim=-1)
         if self.useFeat:
             p_embed = torch.cat([p_embed, rna_feat], dim=-1) # type: ignore
         p_expr = self.pToExpr(p_embed)
