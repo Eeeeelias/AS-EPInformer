@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime
 import os
 import scripts.utils_forTraining as utils
+import scripts.promoter_enhancer_dataset as pe_dataset
 import pandas as pd
 import numpy as np
 
@@ -105,7 +106,7 @@ for fi in fold_list:
     
     # removed pre-set indices for train, valid, test since our data is now event-based, not gene-based
 
-    all_ds = utils.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell, n_extraFeat=n_extraFeat, 
+    all_ds = pe_dataset.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell, n_extraFeat=n_extraFeat, 
                                              usePromoterSignal=True, n_enhancers=n_enhancers, hic_threshold=hic_threshold, 
                                              distance_threshold=distance_threshold, rna_seq_source=args.rna_seq_source)
     # create train, valid, test indices

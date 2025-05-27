@@ -172,7 +172,7 @@ class EPInformer_v2(nn.Module):
         else:
             self.attn_encoder = get_clones(MHAttention_encoderLayer_noLN(d_model=out_dim, nhead=head), self.n_encoder)
        
-        attn_mask = (~np.identity(self.n_enhancer+1).astype(bool)) # changed +1 to +4 to account for the exon segments
+        attn_mask = (~np.identity(self.n_enhancer+4).astype(bool)) # changed +1 to +4 to account for the exon segments
         attn_mask[:, 0] = False
         attn_mask[0, :] = False
         attn_mask = torch.from_numpy(attn_mask)
@@ -256,14 +256,21 @@ class EPInformer_v2(nn.Module):
     def forward(self, pe_seq, exon_seq, rna_feat=None, extraFeat=None):
         # if enhancers_padding_mask is None:
         enhancers_padding_mask = ~(pe_seq.sum(-1).sum(-1) > 0).bool()
+        exon_padding_mask = ~(exon_seq.sum(-1).sum(-1) > 0).bool() # added padding mask for segments and combined
+        enhancers_padding_mask = torch.concat([enhancers_padding_mask, exon_padding_mask], dim=1)
         
         pe_embed = self.seq_encoder(pe_seq)
         pe_embed = self.conv_out(pe_embed)
 
+        exon_embed = self.segment_encoder(exon_seq)
+        exon_embed = self.segment_conv_out(exon_embed)
         pe_flatten_embed = torch.flatten(pe_embed.permute(0, 2, 1, 3), start_dim=2)
+        exon_flatten_embed = torch.flatten(exon_embed.permute(0, 2, 1, 3), start_dim=2)
+        pe_flatten_embed = torch.concat([pe_flatten_embed, exon_flatten_embed], dim=1)
 
         if extraFeat is not None:
             # fill extraFeat with zeros on dim 1
+            extraFeat = F.pad(extraFeat, pad=(0,0,0,3))
             pe_flatten_embed = self.add_pos_conv(torch.concat([pe_flatten_embed, extraFeat], axis=-1).permute(0,2,1)).permute(0,2,1) # type: ignore
         attn_list = []
 
@@ -276,4 +283,5 @@ class EPInformer_v2(nn.Module):
         if self.useFeat:
             p_embed = torch.cat([p_embed, rna_feat], dim=-1) # type: ignore
         p_expr = self.pToExpr(p_embed)
-        return p_expr, torch.tensor([1]).to(self.device), torch.cat(attn_list)
+        p_splice = self.pToSplice(p_embed)
+        return p_expr, p_splice, torch.cat(attn_list)
