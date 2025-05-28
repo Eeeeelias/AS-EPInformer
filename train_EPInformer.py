@@ -8,7 +8,7 @@ import scripts.promoter_enhancer_dataset as pe_dataset
 import pandas as pd
 import numpy as np
 
-from EPInformer.models import EPInformer_v2, enhancer_predictor_256bp
+from EPInformer.models_multi import EPInformer_v2, enhancer_predictor_256bp
 from scipy import stats
 from tqdm import tqdm
 import torch

@@ -30,7 +30,7 @@ class promoter_enhancer_dataset(Dataset):
         self.rna_seq_source = rna_seq_source
         self.gene_sequences = h5py.File(self.data_folder + '/event_sequences.h5', 'r')
         self.event_keys = list(self.gene_sequences.keys())
-        self.psi_response = pd.read_csv(self.data_folder + '/psi_response.csv', index_col=1)
+        self.psi_response = pd.read_csv(self.data_folder + '/psi_response.csv', index_col=0)
         if cell_type == 'K562':
             # promoter_df = pd.read_csv('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
             promoter_df = pd.read_csv(self.data_folder + '/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')

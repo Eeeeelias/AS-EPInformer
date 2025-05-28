@@ -29,9 +29,9 @@ def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
 
-def anti_mse_loss(pred, target, alpha=0.1):
+def anti_mse_loss(pred, target, alpha=0.3):
     mse = (pred - target) ** 2
-    confidence_reward = (pred - 0.5) ** 2
+    confidence_reward = pred - pred ** 2
     return (mse - alpha * confidence_reward).mean()
 
 class Logger():
@@ -219,7 +219,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             splice_loss += loss_splice.item()
 
             loss = loss_expr# + loss_intensity + loss_contact
-            # loss = loss + loss_splice # make sure this works with backprop
+            loss = loss + loss_splice # make sure this works with backprop
             # propagate the loss backward
             loss.backward()
             # update the gradients
@@ -285,7 +285,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
 
             loss_expr = L_expr(pred_expr, y_expr)
             loss_splice = L_psi(pred_splice, y_psi)
-            # loss_e += loss_expr.item() + loss_splice.item()
+            loss_e += loss_expr.item() + loss_splice.item()
 
             preds += outputs
             actual += labels
@@ -344,10 +344,8 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             input_feat = input_feat.float().to(device)
             # input_dist = input_dist.long().to(device)
             input_dist = input_dist.float().to(device)
-            # input_PEmask = ~(input_PE.sum(-1).sum(-1) > 0).bool().to(device)
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
-            # print(input_P.shape, input_E.shape, input_Emask.shape)
             pred_expr, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
 
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
@@ -372,8 +370,8 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
     df = pd.DataFrame(index=np.array(ensid_list).flatten())
     df['PredExpr'] = preds
     df['ActualExpr'] = actual
-    #df['PredPsi'] = preds_psi
-    #df['ActualPsi'] = actual_psi
+    df['PredPsi'] = preds_psi
+    df['ActualPsi'] = actual_psi
     df['fold_idx'] = fold_i
 
     if saved_model_path is not None:
