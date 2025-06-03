@@ -16,7 +16,7 @@ import h5py
 class promoter_enhancer_dataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
-                 rna_seq_source='xpresso'):
+                 rna_seq_source='xpresso', tpm='gene'):
         self.expr_type = expr_type
         self.cell_type = cell_type
         self.data_folder = data_folder
@@ -28,6 +28,7 @@ class promoter_enhancer_dataset(Dataset):
         self.distance_threshold = distance_threshold
         self.hic_threshold = hic_threshold
         self.rna_seq_source = rna_seq_source
+        self.tpm_level = "_summed_tpm" if tpm == 'transcript' else "_gene_level_tpm"
         self.gene_sequences = h5py.File(self.data_folder + '/event_sequences.h5', 'r')
         self.event_keys = list(self.gene_sequences.keys())
         self.psi_response = pd.read_csv(self.data_folder + '/psi_response.csv', index_col=0)
@@ -56,7 +57,7 @@ class promoter_enhancer_dataset(Dataset):
 
     def __getitem__(self, idx):
         
-        if self.expr_type == 'multi':
+        if self.expr_type == 'multi' or self.expr_type == 'transcript':
             event = self.valid_events[idx]
             gene_id = event.split(";")[0]
             # find idx where gene_id is in the data_h5
@@ -70,7 +71,7 @@ class promoter_enhancer_dataset(Dataset):
 
         # added exon & intron sequences
         segment_tensor = torch.Tensor([])
-        if self.expr_type == 'multi':
+        if self.expr_type == 'multi' or self.expr_type == 'transcript':
             upstream, downstream, exon = None, None, None
             sequences = self.gene_sequences[event]
             for key in sequences.keys():
@@ -162,15 +163,21 @@ class promoter_enhancer_dataset(Dataset):
             
         elif self.expr_type == 'multi':
             event_expr = self.psi_response.loc[event]
-            expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_gene_level_tpm'])).float() # should be summed_tpm
+            expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}{self.tpm_level}'])).float()
             psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi'])).float()
+        
+        elif self.expr_type == 'transcript':
+            event_expr = self.psi_response.loc[event]
+            expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}{self.tpm_level}'])).float()
+            psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi'])).float()
+        
         else:
             assert False, 'Label does not exist!'
         
         return pe_code_tensor, segment_tensor, rnaFeat_tensor, pe_feat_tensor, expr_tensor, psi_tensor, sample_ensid
 
     def get_valid_genes(self):
-        if not self.expr_type == 'multi':
+        if not self.expr_type == 'multi' and not self.expr_type == 'transcript':
             return [x.decode() for x in self.data_h5['ensid'][:]]
         gene_ids = [x.split(";")[0] for x in self.event_keys]
         ensid_list = set([x.decode() for x in self.data_h5['ensid'][:]])
@@ -187,3 +194,4 @@ class promoter_enhancer_dataset(Dataset):
         elif len(seq) > length:
             one_hot = one_hot[:length]
         return one_hot
+    

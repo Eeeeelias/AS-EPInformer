@@ -7,8 +7,9 @@ import scripts.utils_forTraining as utils
 import scripts.promoter_enhancer_dataset as pe_dataset
 import pandas as pd
 import numpy as np
+from collections import defaultdict
+import random
 
-from EPInformer.models_multi import EPInformer_v2, enhancer_predictor_256bp
 from scipy import stats
 from tqdm import tqdm
 import torch
@@ -22,13 +23,14 @@ parser.add_argument("--fold", type=list_of_strings, help="test fold", default='a
 parser.add_argument("--model_type", type=str, help='EPInformer type', default='EPInformer-PE-Activity', choices=['EPInformer-PE', 'EPInformer-PE-Activity', 'EPInformer-PE-Activity-HiC'])  
 parser.add_argument('--distance_threshold', type=int, help='max distance to TSS', default=100_000) 
 parser.add_argument('--hic_threshold', type=int, help='hic loop thresold', default=-1) 
-parser.add_argument('--expr_assay', type=str, help='expression_assay', choices=['CAGE', 'RNA', 'multi'])
+parser.add_argument('--expr_assay', type=str, help='expression_assay', choices=['CAGE', 'RNA', 'multi', 'transcript'])
 parser.add_argument('--batch_size', type=int, help='batch size', default=16)
 parser.add_argument('--n_interact_enc',type=int, help='layers of interaction encoder', default=3)
 parser.add_argument('--epochs',type=int, help='training epochs', default=100)
 parser.add_argument('--cuda', help='use cuda', action='store_true')
 parser.add_argument('--use_pretrained_encoder', help='use pretrained sequence encoder', action='store_true')
 parser.add_argument('--rna_seq_source', type=str, help='Which RNA-seq source to use', choices=['xpresso', 'epiatlas'], default='xpresso')
+parser.add_argument('--tpm_level', type=str, help='TPM level for RNA-seq', choices=['gene', 'transcript'], default='gene')
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -40,7 +42,7 @@ def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     
     return filtered_train_ids, filtered_valid_ids, filtered_test_ids
 
-def create_set_indices(all_ids, train_ratio=0.8, valid_ratio=0.1, test_ratio=0.1, seed=0):
+def create_set_indices(all_ids, train_ratio=0.8, valid_ratio=0.1, events=False, seed=0):
     """
     Create train, valid, test indices based on the given ratios
     """
@@ -57,11 +59,61 @@ def create_set_indices(all_ids, train_ratio=0.8, valid_ratio=0.1, test_ratio=0.1
     
     return train_ids, valid_ids, test_ids
 
+def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float = 0.15, test_frac: float = 0.15, 
+                        seed: int = 42) -> tuple[list[str], list[str], list[str]]:
+    """
+    Splits event IDs into train/val/test sets, grouping by gene of each ID.
+    
+    Parameters:
+    - ids: List of ID strings, each with parts separated by ';'.
+    - train_frac, val_frac, test_frac: Fractions for each split (should sum to 1).
+    - seed: Random seed for reproducibility.
+    
+    Returns:
+    - A tuple of three lists: (train_ids, val_ids, test_ids)
+    """
+    print(f"Splitting gene-aware")
+    assert abs(train_frac + val_frac + test_frac - 1.0) < 1e-6, "Fractions must sum to 1."
+
+    # Group full IDs by their shared key (0-th element of the split)
+    key_to_indices = defaultdict(list)
+    for idx, id_ in enumerate(ids):
+        key = id_.split(';')[0]
+        key_to_indices[key].append(idx)
+
+    # Shuffle keys deterministically
+    random.seed(seed)
+    all_keys = list(key_to_indices.keys())
+    random.shuffle(all_keys)
+
+    # Compute split cutoffs
+    n = len(all_keys)
+    train_cutoff = int(train_frac * n)
+    val_cutoff = int((train_frac + val_frac) * n)
+
+    train_keys = all_keys[:train_cutoff]
+    val_keys = all_keys[train_cutoff:val_cutoff]
+    test_keys = all_keys[val_cutoff:]
+
+    # Gather indices
+    train_indices = [idx for k in train_keys for idx in key_to_indices[k]]
+    val_indices = [idx for k in val_keys for idx in key_to_indices[k]]
+    test_indices = [idx for k in test_keys for idx in key_to_indices[k]]
+
+    return train_indices, val_indices, test_indices
+
 # example
 # python train_EPInformer.py --cell K562  --model_type EPInformer-PE-Activity --expr_assay CAGE --use_pretrained_encoder --batch_size 16
 
 ##### parameter ######
 args = parser.parse_args()
+
+#### import the right EPinformer model
+if args.expr_assay == 'multi' or args.expr_assay == 'transcript':
+    from EPInformer.models_multi import EPInformer_v2, enhancer_predictor_256bp
+else:
+    from EPInformer.models import EPInformer_v2, enhancer_predictor_256bp
+
 
 cell = args.cell
 
@@ -108,10 +160,13 @@ for fi in fold_list:
 
     all_ds = pe_dataset.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell, n_extraFeat=n_extraFeat, 
                                              usePromoterSignal=True, n_enhancers=n_enhancers, hic_threshold=hic_threshold, 
-                                             distance_threshold=distance_threshold, rna_seq_source=args.rna_seq_source)
+                                             distance_threshold=distance_threshold, rna_seq_source=args.rna_seq_source, 
+                                             tpm=args.tpm_level)
     # create train, valid, test indices
-    train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1, 
-                                                        test_ratio=0.1, seed=42+int(fi))
+    #train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1, 
+    #                                                    events=True, seed=42+int(fi))
+    train_idx, valid_idx, test_idx = split_multitask_ids(all_ds.event_keys, train_frac=0.8, val_frac=0.1, test_frac=0.1,
+                                                          seed=42+int(fi))
 
     train_ds = Subset(all_ds, train_idx)
     valid_ds = Subset(all_ds, valid_idx)
@@ -132,6 +187,6 @@ for fi in fold_list:
     model = model.to(device)
     model.name = model.name.replace('EPInformerV2', args.model_type) + '.' +  cell + '.' + expr_type
     utils.train(model, train_ds, valid_dataset=valid_ds, EPOCHS=n_epoch, model_name = model.name, fold_i=fi, 
-                batch_size=batch_size, device=device, saved_model_path=saved_model_path)
+                batch_size=batch_size, device=device, saved_model_path=saved_model_path, predict=expr_type)
     test_df = utils.test(model, test_ds, model_name = model.name, saved_model_path=saved_model_path, fold_i=fi, 
                          batch_size=batch_size, device=device)

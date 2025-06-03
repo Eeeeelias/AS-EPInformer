@@ -31,8 +31,8 @@ def get_lr(optimizer):
 
 def anti_mse_loss(pred, target, alpha=0.3):
     mse = (pred - target) ** 2
-    confidence_reward = pred - pred ** 2
-    return (mse - alpha * confidence_reward).mean()
+    confidence_penalty = pred - pred ** 2
+    return (mse + alpha * confidence_penalty).mean()
 
 class Logger():
     """A logging class that can report or save metrics.
@@ -151,7 +151,7 @@ class EarlyStopping:
 
 def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, fixed_encoder = False, 
           n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, device = 'cuda', stratify=None, 
-          class_weight=None, EPOCHS=100, valid_size=1000):
+          class_weight=None, EPOCHS=100, valid_size=1000, predict='multi'):
     if not os.path.exists(saved_model_path):
         os.mkdir(saved_model_path)
     if not os.path.exists(saved_model_path + "/losses.csv"):
@@ -219,7 +219,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             splice_loss += loss_splice.item()
 
             loss = loss_expr# + loss_intensity + loss_contact
-            loss = loss + loss_splice # make sure this works with backprop
+            if predict == 'multi':
+                loss = loss + loss_splice # make sure this works with backprop
             # propagate the loss backward
             loss.backward()
             # update the gradients
@@ -370,8 +371,9 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
     df = pd.DataFrame(index=np.array(ensid_list).flatten())
     df['PredExpr'] = preds
     df['ActualExpr'] = actual
-    df['PredPsi'] = preds_psi
-    df['ActualPsi'] = actual_psi
+    if len(preds) == len(preds_psi):
+        df['PredPsi'] = preds_psi
+        df['ActualPsi'] = actual_psi
     df['fold_idx'] = fold_i
 
     if saved_model_path is not None:

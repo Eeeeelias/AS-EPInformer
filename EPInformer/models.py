@@ -165,8 +165,6 @@ class EPInformer_v2(nn.Module):
             self.name = f'EPInformerV2.{base_size}base.{out_dim}dim.{n_encoder}Trans.{head}head.{useBN}BN.{useLN}LN.' \
                         f'{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh'
         
-        self.segment_encoder = seq_256bp_encoder(base_size=base_size)
-
         if useLN: # use layer norm
             self.attn_encoder = get_clones(MHAttention_encoderLayer(d_model=out_dim, nhead=head), self.n_encoder)
         else:
@@ -197,22 +195,6 @@ class EPInformer_v2(nn.Module):
                  # nn.Linear(38, 8), # 2kb nn.Linear(101, 8)
                 nn.ELU(),
             )
-            self.segment_conv_out = nn.Sequential(
-                nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
-                nn.BatchNorm2d(64),
-                nn.ELU(),
-                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 4)),
-                nn.BatchNorm2d(64),
-                nn.ELU(),
-                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 6)),
-                nn.BatchNorm2d(64),
-                nn.ELU(),
-                nn.Conv2d(in_channels = 64, out_channels=32, kernel_size=(1, 1)),
-                nn.BatchNorm2d(32),
-                nn.ELU(),
-                nn.Linear(40, int(self.out_dim/32)), # added 40 to account for the segment length
-                nn.ELU(),
-            )
         else:
             self.conv_out = nn.Sequential(
                 nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
@@ -233,13 +215,6 @@ class EPInformer_v2(nn.Module):
         else:
             feat_n = 0
         self.pToExpr = nn.Sequential(
-            nn.Linear(self.out_dim+feat_n, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
-        )
-        self.pToSplice = nn.Sequential(
             nn.Linear(self.out_dim+feat_n, 128),
             nn.ReLU(),
             nn.Linear(128, 128),
