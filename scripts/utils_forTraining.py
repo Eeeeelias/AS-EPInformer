@@ -219,7 +219,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             splice_loss += loss_splice.item()
 
             loss = loss_expr# + loss_intensity + loss_contact
-            if predict == 'multi':
+            if predict == 'multi' and False:
                 loss = loss + loss_splice # make sure this works with backprop
             # propagate the loss backward
             loss.backward()

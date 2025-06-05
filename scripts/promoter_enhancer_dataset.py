@@ -16,7 +16,7 @@ import h5py
 class promoter_enhancer_dataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
-                 rna_seq_source='xpresso', tpm='gene'):
+                 rna_seq_source='xpresso', tpm='gene', single_event_train=False):
         self.expr_type = expr_type
         self.cell_type = cell_type
         self.data_folder = data_folder
@@ -48,16 +48,24 @@ class promoter_enhancer_dataset(Dataset):
         self.expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18377_gene_expr_fromXpresso.csv', index_col='ENSID')
         self.present_genes = self.expr_df.index
         self.valid_events = self.get_valid_genes()
+        self.idx_map = None
+        if single_event_train and (self.expr_type == 'multi' or self.expr_type == 'transcript'):
+            self.idx_map, self.event_keys = self.map_idx_single_genes()
+
         if self.rna_seq_source == 'epiatlas':
             self.epiatlas_expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18360_gene_expr_epiatlas.csv', index_col='ENSID')
             self.present_genes = self.epiatlas_expr_df.index
+
         
     def __len__(self): # changed to filter for events 
-        return len(self.valid_events)
+        return len(self.event_keys)
 
     def __getitem__(self, idx):
         
         if self.expr_type == 'multi' or self.expr_type == 'transcript':
+            if self.idx_map is not None:
+                gene_id = self.event_keys[idx].split(";")[0]
+                idx = self.idx_map[gene_id]
             event = self.valid_events[idx]
             gene_id = event.split(";")[0]
             # find idx where gene_id is in the data_h5
@@ -180,6 +188,7 @@ class promoter_enhancer_dataset(Dataset):
         if not self.expr_type == 'multi' and not self.expr_type == 'transcript':
             return [x.decode() for x in self.data_h5['ensid'][:]]
         gene_ids = [x.split(";")[0] for x in self.event_keys]
+        print(f"Found {len(gene_ids)} unique genes in the dataset, {len(set(gene_ids))} after removing duplicates.")
         ensid_list = set([x.decode() for x in self.data_h5['ensid'][:]])
         found_gene_ids = set([x for x in gene_ids if x in ensid_list])
         return [x for x in self.event_keys if x.split(";")[0] in found_gene_ids]
@@ -195,3 +204,18 @@ class promoter_enhancer_dataset(Dataset):
             one_hot = one_hot[:length]
         return one_hot
     
+    def map_idx_single_genes(self):
+        """
+        Maps the indices of single genes in the dataset.
+        Returns a dictionary with gene IDs as keys and their corresponding indices as values.
+        """
+        idx_map = {}
+        seen_genes = set()
+        for idx, event in enumerate(self.valid_events):
+            gene_id = event.split(";")[0]
+            if gene_id not in seen_genes:
+                seen_genes.add(gene_id)
+                idx_map[gene_id] = idx
+        # only the idx we now have in the map should be valid events
+        valid_events = np.array(self.valid_events)[list(idx_map.values())]
+        return idx_map, list(valid_events)

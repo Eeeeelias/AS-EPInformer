@@ -31,6 +31,8 @@ parser.add_argument('--cuda', help='use cuda', action='store_true')
 parser.add_argument('--use_pretrained_encoder', help='use pretrained sequence encoder', action='store_true')
 parser.add_argument('--rna_seq_source', type=str, help='Which RNA-seq source to use', choices=['xpresso', 'epiatlas'], default='xpresso')
 parser.add_argument('--tpm_level', type=str, help='TPM level for RNA-seq', choices=['gene', 'transcript'], default='gene')
+parser.add_argument('--include_exons', help='Include exons in the input data', action='store_true')
+parser.add_argument('--single_events', help='Use single events for training', action='store_true')
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -161,7 +163,7 @@ for fi in fold_list:
     all_ds = pe_dataset.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell, n_extraFeat=n_extraFeat, 
                                              usePromoterSignal=True, n_enhancers=n_enhancers, hic_threshold=hic_threshold, 
                                              distance_threshold=distance_threshold, rna_seq_source=args.rna_seq_source, 
-                                             tpm=args.tpm_level)
+                                             tpm=args.tpm_level, single_event_train=args.single_events)
     # create train, valid, test indices
     #train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1, 
     #                                                    events=True, seed=42+int(fi))
@@ -179,10 +181,10 @@ for fi in fold_list:
                                 weights_only=False, map_location=device)
         print('Loading pretrained model ...', pt_model_name)
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=pretrained_convNet.encoder, 
-                              n_enhancer=n_enhancers, out_dim=64, n_extraFeat=n_extraFeat, device=device).to(device)
+                              n_enhancer=n_enhancers, out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=args.include_exons).to(device)
     else:
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=None, n_enhancer=n_enhancers, 
-                              out_dim=64, n_extraFeat=n_extraFeat, device=device).to(device)
+                              out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=args.include_exons).to(device)
 
     model = model.to(device)
     model.name = model.name.replace('EPInformerV2', args.model_type) + '.' +  cell + '.' + expr_type
