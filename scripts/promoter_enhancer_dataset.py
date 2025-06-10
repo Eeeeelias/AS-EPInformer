@@ -28,6 +28,7 @@ class promoter_enhancer_dataset(Dataset):
         self.distance_threshold = distance_threshold
         self.hic_threshold = hic_threshold
         self.rna_seq_source = rna_seq_source
+        self.use_normalized_psi = False
         self.tpm_level = "_summed_tpm" if tpm == 'transcript' else "_gene_level_tpm"
         self.gene_sequences = h5py.File(self.data_folder + '/event_sequences.h5', 'r')
         self.event_keys = list(self.gene_sequences.keys())
@@ -158,6 +159,7 @@ class promoter_enhancer_dataset(Dataset):
         rnaFeat_tensor = torch.from_numpy(rnaFeat).float()
         # print(pe_distance_tensor)
         psi_tensor = 0
+        normal = "_normal" if self.use_normalized_psi else ""
 
         if self.expr_type == 'CAGE':
             cage_expr = np.log10(self.expr_df.loc[sample_ensid][self.cell_type + '_CAGE_128*3_sum']+1)
@@ -172,12 +174,12 @@ class promoter_enhancer_dataset(Dataset):
         elif self.expr_type == 'multi':
             event_expr = self.psi_response.loc[event]
             expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}{self.tpm_level}'])).float()
-            psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi'])).float()
+            psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi{normal}'])).float()
         
         elif self.expr_type == 'transcript':
             event_expr = self.psi_response.loc[event]
             expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}{self.tpm_level}'])).float()
-            psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi'])).float()
+            psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi{normal}'])).float()
         
         else:
             assert False, 'Label does not exist!'
@@ -219,3 +221,18 @@ class promoter_enhancer_dataset(Dataset):
         # only the idx we now have in the map should be valid events
         valid_events = np.array(self.valid_events)[list(idx_map.values())]
         return idx_map, list(valid_events)
+
+    def z_score_normalize(self, train_idx):
+        """
+        Z-score normalize the psi responses for the training, validation, and test sets.
+        """
+        # get all psi responses for train_idx
+        train_data = self.psi_response.iloc[train_idx]
+        psi_responses = np.array(train_data[f'{self.cell_type}_SE_psi'])
+        mean_psi = np.mean(psi_responses)
+        std_psi = np.std(psi_responses)
+        self.use_normalized_psi = True
+
+        self.psi_response[f'{self.cell_type}_SE_psi_normal'] = (self.psi_response[f'{self.cell_type}_SE_psi'] - mean_psi) / std_psi
+
+        return True

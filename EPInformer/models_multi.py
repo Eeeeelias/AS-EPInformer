@@ -141,7 +141,7 @@ class MHAttention_encoderLayer_noLN(nn.Module):
 
 
 class EPInformer_v2(nn.Module):
-    def __init__(self, base_size = 4, n_encoder=3, out_dim=128, head = 4, pre_trained_encoder= None, n_enhancer=50, 
+    def __init__(self, base_size = 4, n_encoder=3, out_dim=128, head = 8, pre_trained_encoder= None, n_enhancer=50, 
                  device='cuda', useBN=True, usePromoterSignal=True, useFeat=True, n_extraFeat=0, useLN=True, exon_data=False):
         super(EPInformer_v2, self).__init__()
         self.n_enhancer = n_enhancer
@@ -249,6 +249,7 @@ class EPInformer_v2(nn.Module):
             nn.Linear(128, 128),
             nn.ReLU(),
             nn.Linear(128, 1),
+            # nn.Sigmoid()  
         )
         self.add_pos_conv = nn.Sequential(
                 nn.Conv1d(in_channels = self.out_dim+n_extraFeat, out_channels=self.out_dim, kernel_size=1),

@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.optim
 import torch.utils.data as data_utils
 from torch.utils.data import Subset, Dataset
+from denseweight import DenseWeight
 
 import sys
 import argparse
@@ -32,7 +33,15 @@ def get_lr(optimizer):
 def anti_mse_loss(pred, target, alpha=0.3):
     mse = (pred - target) ** 2
     confidence_penalty = pred - pred ** 2
-    return (mse + alpha * confidence_penalty).mean()
+    return (mse + alpha * confidence_penalty)
+
+def dense_loss(pred, target, dw): # from https://link.springer.com/article/10.1007/s10994-021-06023-5
+    if dw is None:
+        return nn.SmoothL1Loss()(pred, target)
+    weight = dw(target.float().cpu().detach().numpy()) 
+    loss = anti_mse_loss(pred, target).cpu().detach().numpy()
+    weighted_loss = weight * loss
+    return torch.tensor(weighted_loss.mean(), dtype=torch.float32, device=pred.device)
 
 class Logger():
     """A logging class that can report or save metrics.
@@ -181,8 +190,19 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     early_stopping = EarlyStopping(patience=3,
                verbose=True, path= saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt")
 
+    dw = DenseWeight(alpha=0.6)
+    # get all PSI values from training dataset
+    if predict == 'multi':
+        all_psi = []
+        for data in trainloader:
+            _, _, _, _, _, y_psi, _ = data
+            all_psi.extend(y_psi.flatten().cpu().numpy())
+        dw.fit(np.array(all_psi))
+    else:
+        dw = None
     L_expr = nn.SmoothL1Loss()
-    L_splice = anti_mse_loss
+    L_splice = nn.SmoothL1Loss()
+    loss_weights = (1.0, 1.0) if predict == 'multi' else (1.0, 0.0)
     optimizer = torch.optim.AdamW(net.parameters(), lr=learning_rate, weight_decay=1e-6)
     print('Model name:', net.name)
     lrs = []
@@ -213,14 +233,17 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             pred_expr, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
             # check devices for all tensors
             loss_expr = L_expr(pred_expr, y_expr)
-            loss_splice = L_splice(pred_splice, y_psi) # splicing loss here
-            loss_e += (loss_expr.item() + loss_splice.item()) # possibly add weights later
+            if dw is not None:
+                loss_splice = dense_loss(pred_splice, y_psi, dw)
+            else:
+                loss_splice = L_splice(pred_splice, y_psi) # splicing loss here
+            loss_e += ((loss_expr.item() * loss_weights[0]) + (loss_splice.item() * loss_weights[1]))
             expression_loss += loss_expr.item()
             splice_loss += loss_splice.item()
 
             loss = loss_expr# + loss_intensity + loss_contact
-            if predict == 'multi' and False:
-                loss = loss + loss_splice # make sure this works with backprop
+            if predict == 'multi':
+                loss = (loss_expr * loss_weights[0]) + (loss_splice * loss_weights[1])
             # propagate the loss backward
             loss.backward()
             # update the gradients
@@ -238,8 +261,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         val_pr_wE, val_r2_wE = val_pr_all, val_r2_all
         print('Valdaition R square all:', val_r2_all)
         early_stopping(-val_r2, net, epoch)
-        loss_file.write(f"{fold_i}\t{epoch+1}\t{running_loss/len(trainloader)}\t{expression_loss/len(trainloader)}\t" \
-                        f"{splice_loss/len(trainloader)}\t{val_mse_all}\t{val_r2_all}\n")
+        loss_file.write(f"{fold_i},{epoch+1},{running_loss/len(trainloader)},{expression_loss/len(trainloader)}," \
+                        f"{splice_loss/len(trainloader)},{val_mse_all},{val_r2_all}\n")
         loss_file.flush()
         if model_logger is not None:
             label_type = net.name.split('.')[-1]

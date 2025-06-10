@@ -169,6 +169,10 @@ for fi in fold_list:
     #                                                    events=True, seed=42+int(fi))
     train_idx, valid_idx, test_idx = split_multitask_ids(all_ds.event_keys, train_frac=0.8, val_frac=0.1, test_frac=0.1,
                                                           seed=42+int(fi))
+    try:
+        all_ds.z_score_normalize(train_idx)
+    except:
+        print("Z-score normalization failed, skipping normalization step.")
 
     train_ds = Subset(all_ds, train_idx)
     valid_ds = Subset(all_ds, valid_idx)
@@ -181,7 +185,8 @@ for fi in fold_list:
                                 weights_only=False, map_location=device)
         print('Loading pretrained model ...', pt_model_name)
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=pretrained_convNet.encoder, 
-                              n_enhancer=n_enhancers, out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=args.include_exons).to(device)
+                              n_enhancer=n_enhancers, out_dim=64, n_extraFeat=n_extraFeat, device=device, 
+                              exon_data=args.include_exons).to(device)
     else:
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=None, n_enhancer=n_enhancers, 
                               out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=args.include_exons).to(device)
