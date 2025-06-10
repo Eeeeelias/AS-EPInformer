@@ -28,11 +28,12 @@ parser.add_argument('--batch_size', type=int, help='batch size', default=16)
 parser.add_argument('--n_interact_enc',type=int, help='layers of interaction encoder', default=3)
 parser.add_argument('--epochs',type=int, help='training epochs', default=100)
 parser.add_argument('--cuda', help='use cuda', action='store_true')
+parser.add_argument('--xpu', help='use xpu', action='store_true')
 parser.add_argument('--use_pretrained_encoder', help='use pretrained sequence encoder', action='store_true')
 parser.add_argument('--rna_seq_source', type=str, help='Which RNA-seq source to use', choices=['xpresso', 'epiatlas'], default='xpresso')
 parser.add_argument('--tpm_level', type=str, help='TPM level for RNA-seq', choices=['gene', 'transcript'], default='gene')
 parser.add_argument('--include_exons', help='Include exons in the input data', action='store_true')
-parser.add_argument('--single_events', help='Use single events for training', action='store_true')
+parser.add_argument('--single_events', help='Use single events per gene for training', action='store_true')
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -121,6 +122,8 @@ cell = args.cell
 
 if args.cuda:
     device = 'cuda'
+elif args.xpu:
+    device = 'xpu'
 else:
     device = 'cpu'
 distance_threshold = args.distance_threshold
@@ -171,6 +174,7 @@ for fi in fold_list:
                                                           seed=42+int(fi))
     try:
         all_ds.z_score_normalize(train_idx)
+        print("Z-score normalization applied successfully.")
     except:
         print("Z-score normalization failed, skipping normalization step.")
 
