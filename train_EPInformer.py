@@ -173,7 +173,7 @@ for fi in fold_list:
     train_idx, valid_idx, test_idx = split_multitask_ids(all_ds.event_keys, train_frac=0.8, val_frac=0.1, test_frac=0.1,
                                                           seed=42+int(fi))
     try:
-        all_ds.z_score_normalize(train_idx)
+        normals = all_ds.z_score_normalize(train_idx)
         print("Z-score normalization applied successfully.")
     except:
         print("Z-score normalization failed, skipping normalization step.")
@@ -200,4 +200,4 @@ for fi in fold_list:
     utils.train(model, train_ds, valid_dataset=valid_ds, EPOCHS=n_epoch, model_name = model.name, fold_i=fi, 
                 batch_size=batch_size, device=device, saved_model_path=saved_model_path, predict=expr_type)
     test_df = utils.test(model, test_ds, model_name = model.name, saved_model_path=saved_model_path, fold_i=fi, 
-                         batch_size=batch_size, device=device)
+                         batch_size=batch_size, normals=normals, device=device)

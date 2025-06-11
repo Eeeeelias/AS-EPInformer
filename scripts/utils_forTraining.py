@@ -192,7 +192,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     dw = DenseWeight(alpha=0.6)
     # get all PSI values from training dataset
-    if predict == 'multi':
+    if predict == 'multi' and False:
         all_psi = []
         for data in trainloader:
             _, _, _, _, _, y_psi, _ = data
@@ -339,7 +339,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
 
     return mse, r_value**2, peasonr
 
-def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_size=64, device = 'cuda', model_type='best'):
+def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_size=64, device = 'cuda', model_type='best', normals=None):
     testloader = data_utils.DataLoader(test_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     # checkpoint = torch.load(saved_model_path + "/fold_" + str(fold_i) + "_"+model_name+"_checkpoint.pt")
     # net.load_state_dict(checkpoint['model_state_dict'])
@@ -371,6 +371,13 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
             pred_expr, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
+
+            if normals:
+                pred_expr = (pred_expr * normals['std_expr']) + normals['mean_expr']
+                y_expr = (y_expr * normals['std_expr']) + normals['mean_expr']
+                
+                pred_splice = (pred_splice * normals['std_psi']) + normals['mean_psi']
+                y_psi = (y_psi * normals['std_psi']) + normals['mean_psi']
 
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())

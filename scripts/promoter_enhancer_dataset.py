@@ -173,12 +173,12 @@ class promoter_enhancer_dataset(Dataset):
             
         elif self.expr_type == 'multi':
             event_expr = self.psi_response.loc[event]
-            expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}{self.tpm_level}'])).float()
+            expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}{self.tpm_level}{normal}'])).float()
             psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi{normal}'])).float()
         
         elif self.expr_type == 'transcript':
             event_expr = self.psi_response.loc[event]
-            expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}{self.tpm_level}'])).float()
+            expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}{self.tpm_level}{normal}'])).float()
             psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi{normal}'])).float()
         
         else:
@@ -229,10 +229,18 @@ class promoter_enhancer_dataset(Dataset):
         # get all psi responses for train_idx
         train_data = self.psi_response.iloc[train_idx]
         psi_responses = np.array(train_data[f'{self.cell_type}_SE_psi'])
+        expr_responses = np.array(train_data[f'{self.cell_type}{self.tpm_level}'])
         mean_psi = np.mean(psi_responses)
         std_psi = np.std(psi_responses)
+        mean_expr = np.mean(expr_responses)
+        std_expr = np.std(expr_responses)
         self.use_normalized_psi = True
 
-        self.psi_response[f'{self.cell_type}_SE_psi_normal'] = (self.psi_response[f'{self.cell_type}_SE_psi'] - mean_psi) / std_psi
+        self.psi_response[f'{self.cell_type}_SE_psi_normal'] = (
+            self.psi_response[f'{self.cell_type}_SE_psi'] - mean_psi) / std_psi
+        
+        self.psi_response[f'{self.cell_type}{self.tpm_level}_normal'] = (
+            self.psi_response[f'{self.cell_type}{self.tpm_level}'] - mean_expr) / std_expr
 
-        return True
+        return {'mean_psi': mean_psi, 'std_psi': std_psi, 
+                'mean_expr': mean_expr, 'std_expr': std_expr}
