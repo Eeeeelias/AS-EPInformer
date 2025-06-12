@@ -43,6 +43,41 @@ def dense_loss(pred, target, dw): # from https://link.springer.com/article/10.10
     weighted_loss = weight * loss
     return torch.tensor(weighted_loss.mean(), dtype=torch.float32, device=pred.device)
 
+def hurdle_loss(binary_logits, splicing_pred, target, loss_type='l1', dw=None):
+    binary_target = (target != 1).float()
+
+    binary_target = binary_target.unsqueeze(-1)
+    bce_loss_fn = nn.BCEWithLogitsLoss()
+    bce_loss = bce_loss_fn(binary_logits, binary_target)
+
+    # regression part only for values != 1
+    regression_mask = (target != 1)
+    if regression_mask.any():
+        if loss_type == 'l1':
+            regression_loss_fn = nn.SmoothL1Loss()
+        elif loss_type == 'mse':
+            regression_loss_fn = nn.MSELoss()
+        elif loss_type == 'dense': 
+            regression_loss_fn = lambda x, y: dense_loss(x, y, dw)
+        else:
+            raise ValueError("Unsupported loss type: {}".format(loss_type))
+
+        regression_loss = regression_loss_fn(splicing_pred[regression_mask], target[regression_mask])
+    else:
+        regression_loss = 0.0
+
+    return bce_loss + regression_loss
+
+
+def combine_hurdle_outputs(binary_logits, splicing_pred, threshold=0.5):
+    """Combine binary and regression outputs from a hurdle model."""
+    binary_probs = torch.sigmoid(binary_logits)
+    is_not_1 = (binary_probs > threshold).squeeze(-1)  # True = not 1, False = 1
+
+    final_pred = torch.where(is_not_1, splicing_pred.squeeze(-1), torch.ones_like(splicing_pred.squeeze(-1)))
+
+    return list(final_pred.cpu().detach().numpy())
+
 class Logger():
     """A logging class that can report or save metrics.
 
@@ -192,16 +227,20 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     dw = DenseWeight(alpha=0.6)
     # get all PSI values from training dataset
-    if predict == 'multi' and False:
+    if predict == 'multi':
         all_psi = []
         for data in trainloader:
             _, _, _, _, _, y_psi, _ = data
-            all_psi.extend(y_psi.flatten().cpu().numpy())
+            flat_psi = y_psi.flatten().cpu().numpy()
+            # filter out 1.0 values since they are protected by the hurdle
+            flat_psi = flat_psi[flat_psi != 1.0]
+            if len(flat_psi) > 0:
+                all_psi.extend(flat_psi)
         dw.fit(np.array(all_psi))
     else:
         dw = None
     L_expr = nn.SmoothL1Loss()
-    L_splice = nn.SmoothL1Loss()
+    L_splice = hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
     loss_weights = (1.0, 1.0) if predict == 'multi' else (1.0, 0.0)
     optimizer = torch.optim.AdamW(net.parameters(), lr=learning_rate, weight_decay=1e-6)
     print('Model name:', net.name)
@@ -230,13 +269,13 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             y_psi = y_psi.float().to(device)
 
 
-            pred_expr, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
+            pred_expr, pred_splice_binary, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
             # check devices for all tensors
             loss_expr = L_expr(pred_expr, y_expr)
             if dw is not None:
-                loss_splice = dense_loss(pred_splice, y_psi, dw)
+                loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='dense', dw=dw)
             else:
-                loss_splice = L_splice(pred_splice, y_psi) # splicing loss here
+                loss_splice = L_splice(pred_splice_binary,pred_splice, y_psi) # splicing loss here
             loss_e += ((loss_expr.item() * loss_weights[0]) + (loss_splice.item() * loss_weights[1]))
             expression_loss += loss_expr.item()
             splice_loss += loss_splice.item()
@@ -278,7 +317,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     validloader = data_utils.DataLoader(valid_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     net.eval()
     L_expr = nn.MSELoss()
-    L_psi = nn.MSELoss()
+    L_psi = hurdle_loss
     
     with torch.no_grad():
         preds = []
@@ -299,16 +338,16 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
             # print(input_P.shape, input_E.shape, input_Emask.shape)
-            pred_expr, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
+            pred_expr, pred_splice_binary, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
 
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
 
-            outputs_psi = list(pred_splice.flatten().cpu().detach().numpy())
+            outputs_psi = combine_hurdle_outputs(pred_splice_binary, pred_splice)
             labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
             loss_expr = L_expr(pred_expr, y_expr)
-            loss_splice = L_psi(pred_splice, y_psi)
+            loss_splice = L_psi(pred_splice_binary, pred_splice, y_psi, loss_type='mse')
             loss_e += loss_expr.item() + loss_splice.item()
 
             preds += outputs
@@ -337,7 +376,10 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     print("### MSE:", mse_psi, "R²:", r_value_psi**2, 'PeasonR:', peasonr_psi)
     print("###"*20)
 
-    return mse, r_value**2, peasonr
+    # get average r2 
+    avg_r2 = (r_value**2 + r_value_psi**2) / 2
+
+    return mse, avg_r2, peasonr
 
 def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_size=64, device = 'cuda', model_type='best', normals=None):
     testloader = data_utils.DataLoader(test_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
@@ -359,6 +401,10 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
         actual = []
         preds_psi = []
         actual_psi = []
+        uncorr_pred_expr = []
+        uncorr_pred_splice = []
+        uncorr_actual_expr = []
+        uncorr_actual_psi = []
 
         ensid_list = []
         for data in tqdm(testloader):
@@ -370,9 +416,14 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             input_dist = input_dist.float().to(device)
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
-            pred_expr, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
+            pred_expr, pred_splice_binary, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
 
             if normals:
+                uncorr_pred_ep = pred_expr.clone()
+                uncorr_pred_sp = pred_splice.clone()
+                uncorr_y_expr = y_expr.clone()
+                uncorr_y_psi = y_psi.clone()
+
                 pred_expr = (pred_expr * normals['std_expr']) + normals['mean_expr']
                 y_expr = (y_expr * normals['std_expr']) + normals['mean_expr']
                 
@@ -382,7 +433,7 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
 
-            outputs_psi = list(pred_splice.flatten().cpu().detach().numpy())
+            outputs_psi = combine_hurdle_outputs(pred_splice_binary, pred_splice)
             labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
             preds_psi += outputs_psi
@@ -391,6 +442,12 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             preds += outputs
             actual += labels
             ensid_list += eid
+
+            if normals:
+                uncorr_pred_expr += list(uncorr_pred_ep.flatten().cpu().detach().numpy())
+                uncorr_pred_splice += list(uncorr_pred_sp.flatten().cpu().detach().numpy())
+                uncorr_actual_expr += list(uncorr_y_expr.flatten().cpu().detach().numpy())
+                uncorr_actual_psi += list(uncorr_y_psi.flatten().cpu().detach().numpy())
 
 
     slope, intercept, r_value, p_value, std_err = stats.linregress(preds, actual)
@@ -404,6 +461,11 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
     if len(preds) == len(preds_psi):
         df['PredPsi'] = preds_psi
         df['ActualPsi'] = actual_psi
+    if len(preds) == len(uncorr_pred_expr):
+        df['UncorrPredExpr'] = uncorr_pred_expr
+        df['UncorrActualExpr'] = uncorr_actual_expr
+        df['UncorrPredPsi'] = uncorr_pred_splice
+        df['UncorrActualPsi'] = uncorr_actual_psi
     df['fold_idx'] = fold_i
 
     if saved_model_path is not None:

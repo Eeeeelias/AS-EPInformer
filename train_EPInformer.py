@@ -34,6 +34,7 @@ parser.add_argument('--rna_seq_source', type=str, help='Which RNA-seq source to 
 parser.add_argument('--tpm_level', type=str, help='TPM level for RNA-seq', choices=['gene', 'transcript'], default='gene')
 parser.add_argument('--include_exons', help='Include exons in the input data', action='store_true')
 parser.add_argument('--single_events', help='Use single events per gene for training', action='store_true')
+parser.add_argument('--z_score_normalise', help='Apply z-score normalization to the training data', action='store_true')
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -172,11 +173,11 @@ for fi in fold_list:
     #                                                    events=True, seed=42+int(fi))
     train_idx, valid_idx, test_idx = split_multitask_ids(all_ds.event_keys, train_frac=0.8, val_frac=0.1, test_frac=0.1,
                                                           seed=42+int(fi))
-    try:
+    
+    normals = None
+    if args.z_score_normalise:
         normals = all_ds.z_score_normalize(train_idx)
         print("Z-score normalization applied successfully.")
-    except:
-        print("Z-score normalization failed, skipping normalization step.")
 
     train_ds = Subset(all_ds, train_idx)
     valid_ds = Subset(all_ds, valid_idx)

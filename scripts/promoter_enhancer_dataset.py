@@ -92,7 +92,10 @@ class promoter_enhancer_dataset(Dataset):
                     downstream = downstream[:1024]
                 elif 'exon' in key:
                     exon = sequences[key][()].decode()
-                    exon = exon[:1024]
+                    if len(exon) > 1024:
+                        exon_start = exon[:512]
+                        exon_end = exon[-512:]
+                        exon = exon_start + exon_end
         
             # one hot encode the sequences
             vocab = {'A': 0, 'C': 1, 'G': 2, 'T': 3}

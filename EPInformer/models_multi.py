@@ -243,13 +243,20 @@ class EPInformer_v2(nn.Module):
             nn.ReLU(),
             nn.Linear(128, 1),
         )
+
+        self.pToSpliceBinary = nn.Sequential(
+            nn.Linear(self.out_dim+feat_n, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+        )
+
         self.pToSplice = nn.Sequential(
             nn.Linear(self.out_dim+feat_n, 128),
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
             nn.Linear(128, 1),
-            # nn.Sigmoid()  
+            nn.Sigmoid()  
         )
         self.add_pos_conv = nn.Sequential(
                 nn.Conv1d(in_channels = self.out_dim+n_extraFeat, out_channels=self.out_dim, kernel_size=1),
@@ -291,9 +298,11 @@ class EPInformer_v2(nn.Module):
         p_embed = torch.flatten(pe_flatten_embed[:,0,:], start_dim=1)
         if self.useFeat:
             p_embed = torch.cat([p_embed, rna_feat], dim=-1) # type: ignore
+
         p_expr = self.pToExpr(p_embed)
+
         if self.use_exon_data:
-            p_splice = self.pToSplice(p_embed)
-        else:
-            p_splice = p_expr
-        return p_expr, p_splice, torch.cat(attn_list)
+            p_splice_binary_logits = self.pToSpliceBinary(p_embed)
+            p_splice_regression = self.pToSplice(p_embed)
+
+        return p_expr, p_splice_binary_logits, p_splice_regression, torch.cat(attn_list)
