@@ -256,7 +256,7 @@ class EPInformer_v2(nn.Module):
             nn.Linear(128, 128),
             nn.ReLU(),
             nn.Linear(128, 1),
-            nn.Sigmoid()  
+            # nn.Sigmoid()  
         )
         self.add_pos_conv = nn.Sequential(
                 nn.Conv1d(in_channels = self.out_dim+n_extraFeat, out_channels=self.out_dim, kernel_size=1),

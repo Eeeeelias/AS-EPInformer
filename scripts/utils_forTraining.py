@@ -39,7 +39,7 @@ def dense_loss(pred, target, dw): # from https://link.springer.com/article/10.10
     if dw is None:
         return nn.SmoothL1Loss()(pred, target)
     weight = dw(target.float().cpu().detach().numpy()) 
-    loss = anti_mse_loss(pred, target).cpu().detach().numpy()
+    loss = anti_mse_loss(pred, target, alpha=0.5).cpu().detach().numpy()
     weighted_loss = weight * loss
     return torch.tensor(weighted_loss.mean(), dtype=torch.float32, device=pred.device)
 
@@ -239,14 +239,21 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         dw.fit(np.array(all_psi))
     else:
         dw = None
-    L_expr = nn.SmoothL1Loss()
+    L_expr = nn.MSELoss()
     L_splice = hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
     loss_weights = (1.0, 1.0) if predict == 'multi' else (1.0, 0.0)
     optimizer = torch.optim.AdamW(net.parameters(), lr=learning_rate, weight_decay=1e-6)
+    net.train()
+
+    # when using the xpu device, optimise the model for the xpu
+    if device == 'xpu':
+        import intel_extension_for_pytorch as ipex
+        print("Using XPU device for training")
+        net, optimizer = ipex.optimize(net, optimizer=optimizer)
+
     print('Model name:', net.name)
     lrs = []
     # last_loss = None
-    net.train()
     for epoch in range(EPOCHS):
         net.train()
         print('learning rate:', get_lr(optimizer))
@@ -275,7 +282,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             if dw is not None:
                 loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='dense', dw=dw)
             else:
-                loss_splice = L_splice(pred_splice_binary,pred_splice, y_psi) # splicing loss here
+                loss_splice = L_splice(pred_splice, y_psi) # splicing loss here
             loss_e += ((loss_expr.item() * loss_weights[0]) + (loss_splice.item() * loss_weights[1]))
             expression_loss += loss_expr.item()
             splice_loss += loss_splice.item()
@@ -427,8 +434,17 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
                 pred_expr = (pred_expr * normals['std_expr']) + normals['mean_expr']
                 y_expr = (y_expr * normals['std_expr']) + normals['mean_expr']
                 
-                pred_splice = (pred_splice * normals['std_psi']) + normals['mean_psi']
-                y_psi = (y_psi * normals['std_psi']) + normals['mean_psi']
+                corr_pred_splice = []
+                corr_y_psi = []
+                for p_splice, y_splice in zip(pred_splice, y_psi):
+                    if y_splice != 1.0:
+                        p_splice = (p_splice * normals['std_psi']) + normals['mean_psi']
+                        y_splice = (y_splice * normals['std_psi']) + normals['mean_psi']
+                    corr_pred_splice.append(p_splice)
+                    corr_y_psi.append(y_splice)
+
+                pred_splice = torch.tensor(corr_pred_splice, device=device)
+                y_psi = torch.tensor(corr_y_psi, device=device)
 
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())

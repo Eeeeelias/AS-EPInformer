@@ -33,6 +33,9 @@ class promoter_enhancer_dataset(Dataset):
         self.gene_sequences = h5py.File(self.data_folder + '/event_sequences.h5', 'r')
         self.event_keys = list(self.gene_sequences.keys())
         self.psi_response = pd.read_csv(self.data_folder + '/psi_response.csv', index_col=0)
+        # copy index to a new column for easier access
+        self.psi_response['event_id'] = self.psi_response.index
+        self.psi_response['event_type'] = self.psi_response['event_id'].apply(lambda x: 'AR' if ';AR:' in x else 'SE')
         if cell_type == 'K562':
             # promoter_df = pd.read_csv('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
             promoter_df = pd.read_csv(self.data_folder + '/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
@@ -59,10 +62,11 @@ class promoter_enhancer_dataset(Dataset):
 
         
     def __len__(self): # changed to filter for events 
-        return len(self.event_keys)
+        if self.expr_type == 'multi' or self.expr_type == 'transcript':
+            return len(self.event_keys)
+        return len(self.data_h5['ensid'])
 
     def __getitem__(self, idx):
-        
         if self.expr_type == 'multi' or self.expr_type == 'transcript':
             if self.idx_map is not None:
                 gene_id = self.event_keys[idx].split(";")[0]
@@ -232,15 +236,25 @@ class promoter_enhancer_dataset(Dataset):
         # get all psi responses for train_idx
         train_data = self.psi_response.iloc[train_idx]
         psi_responses = np.array(train_data[f'{self.cell_type}_SE_psi'])
+        # get boolean mask for fake events
+        fake_events_train = train_data['event_type'] == 'AR'
+        fake_events_all = self.psi_response['event_type'] == 'AR'
+        psi_responses_real = psi_responses[~fake_events_train]
         expr_responses = np.array(train_data[f'{self.cell_type}{self.tpm_level}'])
-        mean_psi = np.mean(psi_responses)
-        std_psi = np.std(psi_responses)
+        mean_psi = np.mean(psi_responses_real)
+        std_psi = np.std(psi_responses_real)
         mean_expr = np.mean(expr_responses)
         std_expr = np.std(expr_responses)
         self.use_normalized_psi = True
 
-        self.psi_response[f'{self.cell_type}_SE_psi_normal'] = (
-            self.psi_response[f'{self.cell_type}_SE_psi'] - mean_psi) / std_psi
+        #self.psi_response[f'{self.cell_type}_SE_psi_normal'] = (
+        #    self.psi_response[f'{self.cell_type}_SE_psi'] - mean_psi) / std_psi
+
+        # first set placeholder value for fake events, then replace non-fake events with normalized values
+        normalised_psi = (self.psi_response.loc[~fake_events_all, f'{self.cell_type}_SE_psi'] - mean_psi) / std_psi
+        self.psi_response[f'{self.cell_type}_SE_psi_normal'] = np.ones_like(self.psi_response[f'{self.cell_type}_SE_psi'])
+        self.psi_response.loc[~fake_events_all, f'{self.cell_type}_SE_psi_normal'] = normalised_psi
+        
         
         self.psi_response[f'{self.cell_type}{self.tpm_level}_normal'] = (
             self.psi_response[f'{self.cell_type}{self.tpm_level}'] - mean_expr) / std_expr

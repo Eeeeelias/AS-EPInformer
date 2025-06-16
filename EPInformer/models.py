@@ -251,4 +251,4 @@ class EPInformer_v2(nn.Module):
         if self.useFeat:
             p_embed = torch.cat([p_embed, rna_feat], dim=-1) # type: ignore
         p_expr = self.pToExpr(p_embed)
-        return p_expr, torch.tensor([1]).to(self.device), torch.cat(attn_list)
+        return p_expr, torch.tensor([1]).to(self.device), torch.tensor([1]).to(self.device), torch.cat(attn_list)

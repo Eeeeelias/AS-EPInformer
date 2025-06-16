@@ -20,7 +20,8 @@ def list_of_strings(arg):
     return arg.split(',')
 parser.add_argument('--cell', type=str, help='cell line (support K562 and GM12878)', choices=['K562', 'GM12878'])  
 parser.add_argument("--fold", type=list_of_strings, help="test fold", default='all')
-parser.add_argument("--model_type", type=str, help='EPInformer type', default='EPInformer-PE-Activity', choices=['EPInformer-PE', 'EPInformer-PE-Activity', 'EPInformer-PE-Activity-HiC'])  
+parser.add_argument("--model_type", type=str, help='EPInformer type', default='EPInformer-PE-Activity', 
+                    choices=['EPInformer-PE', 'EPInformer-PE-Activity', 'EPInformer-PE-Activity-HiC'])  
 parser.add_argument('--distance_threshold', type=int, help='max distance to TSS', default=100_000) 
 parser.add_argument('--hic_threshold', type=int, help='hic loop thresold', default=-1) 
 parser.add_argument('--expr_assay', type=str, help='expression_assay', choices=['CAGE', 'RNA', 'multi', 'transcript'])
@@ -164,15 +165,21 @@ for fi in fold_list:
     
     # removed pre-set indices for train, valid, test since our data is now event-based, not gene-based
 
-    all_ds = pe_dataset.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell, n_extraFeat=n_extraFeat, 
-                                             usePromoterSignal=True, n_enhancers=n_enhancers, hic_threshold=hic_threshold, 
-                                             distance_threshold=distance_threshold, rna_seq_source=args.rna_seq_source, 
-                                             tpm=args.tpm_level, single_event_train=args.single_events)
+    all_ds = pe_dataset.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell, 
+                                                  n_extraFeat=n_extraFeat, usePromoterSignal=True, 
+                                                  n_enhancers=n_enhancers, hic_threshold=hic_threshold, 
+                                                  distance_threshold=distance_threshold, 
+                                                  rna_seq_source=args.rna_seq_source, tpm=args.tpm_level, 
+                                                  single_event_train=args.single_events)
     # create train, valid, test indices
     #train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1, 
     #                                                    events=True, seed=42+int(fi))
-    train_idx, valid_idx, test_idx = split_multitask_ids(all_ds.event_keys, train_frac=0.8, val_frac=0.1, test_frac=0.1,
-                                                          seed=42+int(fi))
+    if expr_type == 'multi' or expr_type == 'transcript':
+        train_idx, valid_idx, test_idx = split_multitask_ids(all_ds.event_keys, train_frac=0.8, val_frac=0.1, 
+                                                             test_frac=0.1, seed=42+int(fi))
+    else:
+        train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1,
+                                                            events=True, seed=42+int(fi))
     
     normals = None
     if args.z_score_normalise:
