@@ -466,8 +466,12 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
 
-            outputs_psi = combine_hurdle_outputs(pred_splice_binary, pred_splice)
-            labels_psi = list(y_psi.flatten().cpu().detach().numpy())
+            if False:
+                outputs_psi = combine_hurdle_outputs(pred_splice_binary, pred_splice)
+                labels_psi = list(y_psi.flatten().cpu().detach().numpy())
+            else:
+                outputs_psi = list(pred_splice.flatten().cpu().detach().numpy())
+                labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
             preds_psi += outputs_psi
             actual_psi += labels_psi
