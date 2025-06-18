@@ -17,7 +17,7 @@ import argparse
 
 from scipy import stats
 # import sklearn
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, r2_score
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 # logging
@@ -377,35 +377,36 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             if min_max_psi[0] > np.min(outputs_psi) or min_max_psi[1] < np.max(outputs_psi):
                 min_max_psi = [np.min(outputs_psi), np.max(outputs_psi)]
 
-    slope, intercept, r_value, p_value, std_err = stats.linregress(preds, actual)
+    r2_value = r2_score(actual, preds)
     peasonr, pvalue = stats.pearsonr(preds, actual)
     mse = mean_squared_error(preds, actual)
     print("### Validation ### TPM expresion ###")
     print('### Loss:', loss_expr.item()/len(validloader))
     print('### Min-Max Expression:', min_max_expr)
-    print("### MSE:", mse, "R²:", r_value**2, 'PeasonR:', peasonr)
+    print("### MSE:", mse, "R²:", r2_value, 'PeasonR:', peasonr)
     print("###"*20, "\n")
 
     try:
-        slope, intercept, r_value_psi, p_value, std_err = stats.linregress(preds_psi, actual_psi)
+        r2_value_psi = r2_score(actual_psi, preds_psi)
         peasonr_psi, pvalue = stats.pearsonr(preds_psi, actual_psi)
         mse_psi = mean_squared_error(preds_psi, actual_psi)
     except ValueError:
-        r_value_psi = 0
+        r2_value_psi = 0
         peasonr_psi = 0
         mse_psi = 0
     print("### Validation ### PSI expression ###")
     print('### Loss:', loss_splice.item()/len(validloader))
     print('### Min-Max PSI:', min_max_psi)
-    print("### MSE:", mse_psi, "R²:", r_value_psi**2, 'PeasonR:', peasonr_psi)
+    print("### MSE:", mse_psi, "R²:", r2_value_psi, 'PeasonR:', peasonr_psi)
     print("###"*20)
 
     # get average r2 
-    avg_r2 = (r_value**2 + r_value_psi**2) / 2
+    avg_r2 = (r2_value + r2_value_psi) / 2
 
     return mse, avg_r2, peasonr
 
-def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_size=64, device = 'cuda', model_type='best', normals=None):
+def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_size=64, device = 'cuda', 
+         model_type='best', normals=None, predict='multi'):
     testloader = data_utils.DataLoader(test_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     # checkpoint = torch.load(saved_model_path + "/fold_" + str(fold_i) + "_"+model_name+"_checkpoint.pt")
     # net.load_state_dict(checkpoint['model_state_dict'])
@@ -466,7 +467,7 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
 
-            if False:
+            if predict == 'multi':
                 outputs_psi = combine_hurdle_outputs(pred_splice_binary, pred_splice)
                 labels_psi = list(y_psi.flatten().cpu().detach().numpy())
             else:
@@ -487,10 +488,6 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
                 uncorr_actual_psi += list(uncorr_y_psi.flatten().cpu().detach().numpy())
 
 
-    slope, intercept, r_value, p_value, std_err = stats.linregress(preds, actual)
-    peasonr, pvalue = stats.pearsonr(preds, actual)
-    mse = mean_squared_error(preds, actual)
-    # print(fold %s test sequence: %0.3f' % (fold_i, r_value**2))
     sys.stdout.flush()
     df = pd.DataFrame(index=np.array(ensid_list).flatten())
     df['PredExpr'] = preds

@@ -208,4 +208,4 @@ for fi in fold_list:
     utils.train(model, train_ds, valid_dataset=valid_ds, EPOCHS=n_epoch, model_name = model.name, fold_i=fi, 
                 batch_size=batch_size, device=device, saved_model_path=saved_model_path, predict=expr_type)
     test_df = utils.test(model, test_ds, model_name = model.name, saved_model_path=saved_model_path, fold_i=fi, 
-                         batch_size=batch_size, normals=normals, device=device)
+                         batch_size=batch_size, normals=normals, device=device, predict=args.expr_assay)
