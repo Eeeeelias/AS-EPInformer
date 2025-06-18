@@ -39,7 +39,7 @@ def dense_loss(pred, target, dw): # from https://link.springer.com/article/10.10
     if dw is None:
         return nn.SmoothL1Loss()(pred, target)
     weight = dw(target.float().cpu().detach().numpy()) 
-    loss = anti_mse_loss(pred, target, alpha=0.5).cpu().detach().numpy()
+    loss = anti_mse_loss(pred, target, alpha=1).cpu().detach().numpy()
     weighted_loss = weight * loss
     return torch.tensor(weighted_loss.mean(), dtype=torch.float32, device=pred.device)
 
@@ -67,6 +67,11 @@ def hurdle_loss(binary_logits, splicing_pred, target, loss_type='l1', dw=None):
         regression_loss = 0.0
 
     return bce_loss + regression_loss
+
+
+def anti_bias_loss(mse_loss, pred, alpha=0.3):
+    variance_penalty = -torch.var(pred)
+    return mse_loss + alpha * variance_penalty
 
 
 def combine_hurdle_outputs(binary_logits, splicing_pred, threshold=0.5):
@@ -239,7 +244,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         dw.fit(np.array(all_psi))
     else:
         dw = None
-    L_expr = nn.MSELoss()
+    L_expr = nn.HuberLoss()
     L_splice = hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
     loss_weights = (1.0, 1.0) if predict == 'multi' else (1.0, 0.0)
     optimizer = torch.optim.AdamW(net.parameters(), lr=learning_rate, weight_decay=1e-6)
@@ -279,6 +284,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             pred_expr, pred_splice_binary, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
             # check devices for all tensors
             loss_expr = L_expr(pred_expr, y_expr)
+            #loss_expr = anti_bias_loss(loss_expr, pred_expr, alpha=0.3) # anti-bias loss
             if dw is not None:
                 loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='dense', dw=dw)
             else:
@@ -323,7 +329,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_size=16, device = 'cuda'):
     validloader = data_utils.DataLoader(valid_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     net.eval()
-    L_expr = nn.MSELoss()
+    L_expr = nn.HuberLoss()
     L_psi = hurdle_loss
     
     with torch.no_grad():
@@ -332,6 +338,8 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         preds_psi = []
         actual_psi = []
         loss_e = 0
+        min_max_expr = [0,0]
+        min_max_psi = [0,0]
         for data in validloader:
             # print(inputs.size())
             input_PE, input_seg, input_feat, input_dist, y_expr, y_psi, eid = data
@@ -354,6 +362,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
             loss_expr = L_expr(pred_expr, y_expr)
+            # loss_expr = anti_bias_loss(loss_expr, pred_expr, alpha=0.3) # anti-bias loss
             loss_splice = L_psi(pred_splice_binary, pred_splice, y_psi, loss_type='mse')
             loss_e += loss_expr.item() + loss_splice.item()
 
@@ -362,11 +371,18 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             preds_psi += outputs_psi
             actual_psi += labels_psi
 
+            if min_max_expr[0] > np.min(outputs) or min_max_expr[1] < np.max(outputs):
+                min_max_expr = [np.min(outputs), np.max(outputs)]
+
+            if min_max_psi[0] > np.min(outputs_psi) or min_max_psi[1] < np.max(outputs_psi):
+                min_max_psi = [np.min(outputs_psi), np.max(outputs_psi)]
+
     slope, intercept, r_value, p_value, std_err = stats.linregress(preds, actual)
     peasonr, pvalue = stats.pearsonr(preds, actual)
     mse = mean_squared_error(preds, actual)
     print("### Validation ### TPM expresion ###")
     print('### Loss:', loss_expr.item()/len(validloader))
+    print('### Min-Max Expression:', min_max_expr)
     print("### MSE:", mse, "R²:", r_value**2, 'PeasonR:', peasonr)
     print("###"*20, "\n")
 
@@ -380,6 +396,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         mse_psi = 0
     print("### Validation ### PSI expression ###")
     print('### Loss:', loss_splice.item()/len(validloader))
+    print('### Min-Max PSI:', min_max_psi)
     print("### MSE:", mse_psi, "R²:", r_value_psi**2, 'PeasonR:', peasonr_psi)
     print("###"*20)
 
