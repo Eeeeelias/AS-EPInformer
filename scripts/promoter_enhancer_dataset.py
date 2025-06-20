@@ -16,7 +16,7 @@ import h5py
 class promoter_enhancer_dataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
-                 rna_seq_source='xpresso', tpm='gene', single_event_train=False):
+                 rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False):
         self.expr_type = expr_type
         self.cell_type = cell_type
         self.data_folder = data_folder
@@ -28,6 +28,13 @@ class promoter_enhancer_dataset(Dataset):
         self.distance_threshold = distance_threshold
         self.hic_threshold = hic_threshold
         self.rna_seq_source = rna_seq_source
+        self.filter_for_event_genes = event_genes
+        self.include_exons = include_exons
+        
+        if not self.include_exons and (self.expr_type == 'multi' or self.expr_type == 'transcript'):
+            print("INFO: Exons will be included automatically for multi or transcript expression types.")
+            self.include_exons = True
+
         self.use_normalized_psi = False
         self.tpm_level = "_summed_tpm" if tpm == 'transcript' else "_gene_level_tpm"
         self.gene_sequences = h5py.File(self.data_folder + '/event_sequences.h5', 'r')
@@ -36,6 +43,7 @@ class promoter_enhancer_dataset(Dataset):
         # copy index to a new column for easier access
         self.psi_response['event_id'] = self.psi_response.index
         self.psi_response['event_type'] = self.psi_response['event_id'].apply(lambda x: 'AR' if ';AR:' in x else 'SE')
+        self.all_event_genes = set(self.psi_response['gene_id'].unique())
         if cell_type == 'K562':
             # promoter_df = pd.read_csv('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
             promoter_df = pd.read_csv(self.data_folder + '/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
@@ -52,7 +60,7 @@ class promoter_enhancer_dataset(Dataset):
         self.expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18377_gene_expr_fromXpresso.csv', index_col='ENSID')
         self.present_genes = self.expr_df.index
         self.valid_events = self.get_valid_genes()
-        self.idx_map = None
+        self.idx_map = None # map various indices to gene ids
         if single_event_train and (self.expr_type == 'multi' or self.expr_type == 'transcript'):
             self.idx_map, self.event_keys = self.map_idx_single_genes()
 
@@ -60,14 +68,25 @@ class promoter_enhancer_dataset(Dataset):
             self.epiatlas_expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18360_gene_expr_epiatlas.csv', index_col='ENSID')
             self.present_genes = self.epiatlas_expr_df.index
 
-        
+        if self.filter_for_event_genes:
+            self.idx_map = {}
+            # use idx map to filter for event genes
+            c = 0
+            for i, gene in enumerate(self.data_h5['ensid'][:]):
+                gene_id = gene.decode()
+                if gene_id in self.all_event_genes:
+                    self.idx_map[c] = i
+                    c += 1
+
     def __len__(self): # changed to filter for events 
-        if self.expr_type == 'multi' or self.expr_type == 'transcript':
+        if self.include_exons:
             return len(self.event_keys)
+        if self.filter_for_event_genes:
+            return len(self.all_event_genes)
         return len(self.data_h5['ensid'])
 
     def __getitem__(self, idx):
-        if self.expr_type == 'multi' or self.expr_type == 'transcript':
+        if self.include_exons:
             if self.idx_map is not None:
                 gene_id = self.event_keys[idx].split(";")[0]
                 idx = self.idx_map[gene_id]
@@ -75,6 +94,9 @@ class promoter_enhancer_dataset(Dataset):
             gene_id = event.split(";")[0]
             # find idx where gene_id is in the data_h5
             idx = np.where(self.data_h5['ensid'][:] == gene_id.encode())[0][0]
+
+        if self.filter_for_event_genes and self.expr_type != 'multi' and self.expr_type != 'transcript':
+            idx = self.idx_map[idx]
 
         sample_ensid = self.data_h5['ensid'][idx].decode()
         seq_code = self.data_h5['pe_code'][idx]
@@ -84,7 +106,7 @@ class promoter_enhancer_dataset(Dataset):
 
         # added exon & intron sequences
         segment_tensor = torch.Tensor([])
-        if self.expr_type == 'multi' or self.expr_type == 'transcript':
+        if self.include_exons:
             upstream, downstream, exon = None, None, None
             sequences = self.gene_sequences[event]
             for key in sequences.keys():
@@ -194,7 +216,7 @@ class promoter_enhancer_dataset(Dataset):
         return pe_code_tensor, segment_tensor, rnaFeat_tensor, pe_feat_tensor, expr_tensor, psi_tensor, sample_ensid
 
     def get_valid_genes(self):
-        if not self.expr_type == 'multi' and not self.expr_type == 'transcript':
+        if not self.include_exons:
             return [x.decode() for x in self.data_h5['ensid'][:]]
         gene_ids = [x.split(";")[0] for x in self.event_keys]
         print(f"Found {len(gene_ids)} unique genes in the dataset, {len(set(gene_ids))} after removing duplicates.")

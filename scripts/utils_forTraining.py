@@ -200,7 +200,7 @@ class EarlyStopping:
 
 def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, fixed_encoder = False, 
           n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, device = 'cuda', stratify=None, 
-          class_weight=None, EPOCHS=100, valid_size=1000, predict='multi'):
+          EPOCHS=100, valid_size=1000, predict='multi'):
     if not os.path.exists(saved_model_path):
         os.mkdir(saved_model_path)
     if not os.path.exists(saved_model_path + "/losses.csv"):
@@ -244,9 +244,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         dw.fit(np.array(all_psi))
     else:
         dw = None
-    L_expr = nn.HuberLoss()
+    L_expr = nn.SmoothL1Loss()
     L_splice = hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
-    loss_weights = (1.0, 1.0) if predict == 'multi' else (1.0, 0.0)
+    loss_weights = (1.0, 0.00) if predict == 'multi' else (1.0, 0.0)
     optimizer = torch.optim.AdamW(net.parameters(), lr=learning_rate, weight_decay=1e-6)
     net.train()
 
@@ -282,18 +282,20 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
 
             pred_expr, pred_splice_binary, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
-            # check devices for all tensors
+
             loss_expr = L_expr(pred_expr, y_expr)
             #loss_expr = anti_bias_loss(loss_expr, pred_expr, alpha=0.3) # anti-bias loss
+            
             if dw is not None:
                 loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='dense', dw=dw)
             else:
                 loss_splice = L_splice(pred_splice, y_psi) # splicing loss here
+
             loss_e += ((loss_expr.item() * loss_weights[0]) + (loss_splice.item() * loss_weights[1]))
             expression_loss += loss_expr.item()
             splice_loss += loss_splice.item()
 
-            loss = loss_expr# + loss_intensity + loss_contact
+            loss = loss_expr
             if predict == 'multi':
                 loss = (loss_expr * loss_weights[0]) + (loss_splice * loss_weights[1])
             # propagate the loss backward
@@ -308,7 +310,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         #             'Validation_R2_allGene', 'Validation_PearsonR_weGene', 'Validation_R2_weGene', 'Saved?']
 
 
-        val_mse_all, val_r2_all, val_pr_all = validate(net, valid_ds, n_enhancers=n_enhancers, device=device)
+        val_mse_all, val_r2_all, val_pr_all = validate(net, valid_ds, n_enhancers=n_enhancers, device=device, 
+                                                       predict=predict)
         val_r2 = val_r2_all
         val_pr_wE, val_r2_wE = val_pr_all, val_r2_all
         print('Valdaition R square all:', val_r2_all)
@@ -326,11 +329,11 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             break
     return lrs
 
-def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_size=16, device = 'cuda'):
+def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_size=16, device = 'cuda', predict='multi'):
     validloader = data_utils.DataLoader(valid_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     net.eval()
-    L_expr = nn.HuberLoss()
-    L_psi = hurdle_loss
+    L_expr = nn.SmoothL1Loss()
+    L_psi = hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
     
     with torch.no_grad():
         preds = []
@@ -358,13 +361,21 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
 
-            outputs_psi = combine_hurdle_outputs(pred_splice_binary, pred_splice)
-            labels_psi = list(y_psi.flatten().cpu().detach().numpy())
+            if predict == 'multi':
+                outputs_psi = combine_hurdle_outputs(pred_splice_binary, pred_splice)
+                labels_psi = list(y_psi.flatten().cpu().detach().numpy())
+            else:
+                outputs_psi = list(pred_splice.flatten().cpu().detach().numpy())
+                labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
             loss_expr = L_expr(pred_expr, y_expr)
             # loss_expr = anti_bias_loss(loss_expr, pred_expr, alpha=0.3) # anti-bias loss
-            loss_splice = L_psi(pred_splice_binary, pred_splice, y_psi, loss_type='mse')
-            loss_e += loss_expr.item() + loss_splice.item()
+            if predict == 'multi':
+                loss_splice = L_psi(pred_splice_binary, pred_splice, y_psi, loss_type='mse')
+                loss_e += loss_expr.item() + loss_splice.item()
+            else:
+                loss_splice = L_psi(pred_splice, y_psi)
+                loss_e += loss_expr.item()
 
             preds += outputs
             actual += labels
@@ -401,7 +412,10 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     print("###"*20)
 
     # get average r2 
-    avg_r2 = (r2_value + r2_value_psi) / 2
+    if predict == 'multi':
+        avg_r2 = (r2_value + r2_value_psi) / 2
+    else:
+        avg_r2 = r2_value
 
     return mse, avg_r2, peasonr
 
