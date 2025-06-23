@@ -64,9 +64,9 @@ def hurdle_loss(binary_logits, splicing_pred, target, loss_type='l1', dw=None):
 
         regression_loss = regression_loss_fn(splicing_pred[regression_mask], target[regression_mask])
     else:
-        regression_loss = 0.0
+        regression_loss = None
 
-    return bce_loss + regression_loss
+    return bce_loss, regression_loss
 
 
 def anti_bias_loss(mse_loss, pred, alpha=0.3):
@@ -200,7 +200,7 @@ class EarlyStopping:
 
 def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, fixed_encoder = False, 
           n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, device = 'cuda', stratify=None, 
-          EPOCHS=100, valid_size=1000, predict='multi'):
+          EPOCHS=100, valid_size=1000, predict='multi', loss_class=None):
     if not os.path.exists(saved_model_path):
         os.mkdir(saved_model_path)
     if not os.path.exists(saved_model_path + "/losses.csv"):
@@ -227,8 +227,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
-    early_stopping = EarlyStopping(patience=3,
-               verbose=True, path= saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt")
+    early_stopping = EarlyStopping(patience=3, verbose=True, 
+                                   path= saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt")
 
     dw = DenseWeight(alpha=0.6)
     # get all PSI values from training dataset
@@ -246,8 +246,10 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         dw = None
     L_expr = nn.SmoothL1Loss()
     L_splice = hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
-    loss_weights = (1.0, 0.00) if predict == 'multi' else (1.0, 0.0)
-    optimizer = torch.optim.AdamW(net.parameters(), lr=learning_rate, weight_decay=1e-6)
+    # loss_weights = (1.0, 1.0) if predict == 'multi' else (1.0, 0.0)
+    learned_loss = True if loss_class is not None else False
+    all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters())
+    optimizer = torch.optim.AdamW(all_params, lr=learning_rate, weight_decay=1e-6)
     net.train()
 
     # when using the xpu device, optimise the model for the xpu
@@ -287,17 +289,25 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             #loss_expr = anti_bias_loss(loss_expr, pred_expr, alpha=0.3) # anti-bias loss
             
             if dw is not None:
-                loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='dense', dw=dw)
+                loss_splice_binary, loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='dense', dw=dw)
             else:
                 loss_splice = L_splice(pred_splice, y_psi) # splicing loss here
+                loss_splice_binary = 0.0 # placeholder to keep the code structure consistent
 
-            loss_e += ((loss_expr.item() * loss_weights[0]) + (loss_splice.item() * loss_weights[1]))
             expression_loss += loss_expr.item()
-            splice_loss += loss_splice.item()
+            splice_loss += loss_splice.item() if loss_splice is not None else 0.0
 
             loss = loss_expr
-            if predict == 'multi':
-                loss = (loss_expr * loss_weights[0]) + (loss_splice * loss_weights[1])
+            if learned_loss:
+                loss, weight_e, weight_b, weight_s = loss_class(expression_loss, loss_splice_binary, splice_loss)
+            elif predict == 'multi':
+                weight_e, weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(1.0, device=device), torch.tensor(1.0, device=device)
+            else:
+                weight_e, weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(0.0, device=device), torch.tensor(0.0, device=device)
+
+            loss_e += ((loss_expr.item() * weight_e) + (loss_splice_binary.item() * weight_b))
+            if loss_splice is not None:
+                loss_e += (loss_splice.item() * weight_s)
             # propagate the loss backward
             loss.backward()
             # update the gradients
@@ -305,13 +315,14 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             running_loss += loss.item()
 
         print('[Epoch %d] loss: %.9f' % (epoch + 1, running_loss/len(trainloader)))
-        print('Training Loss:', loss_e/len(trainloader))
+        print('Training Loss:', loss_e.item()/len(trainloader))
+        print('Loss weights:', weight_e.item(), weight_b.item(), weight_s.item())
         # log_cols = ['Epoch', 'Training_Loss', 'Validation_Loss', 'Validation_PearsonR_allGene',
         #             'Validation_R2_allGene', 'Validation_PearsonR_weGene', 'Validation_R2_weGene', 'Saved?']
 
 
         val_mse_all, val_r2_all, val_pr_all = validate(net, valid_ds, n_enhancers=n_enhancers, device=device, 
-                                                       predict=predict)
+                                                       predict=predict, loss_weights=(weight_e, weight_b, weight_s))
         val_r2 = val_r2_all
         val_pr_wE, val_r2_wE = val_pr_all, val_r2_all
         print('Valdaition R square all:', val_r2_all)
@@ -329,7 +340,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             break
     return lrs
 
-def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_size=16, device = 'cuda', predict='multi'):
+def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_size=16, device = 'cuda', 
+             predict='multi', loss_weights=(1.0, 1.0, 1.0)):
     validloader = data_utils.DataLoader(valid_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     net.eval()
     L_expr = nn.SmoothL1Loss()
@@ -371,8 +383,12 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             loss_expr = L_expr(pred_expr, y_expr)
             # loss_expr = anti_bias_loss(loss_expr, pred_expr, alpha=0.3) # anti-bias loss
             if predict == 'multi':
-                loss_splice = L_psi(pred_splice_binary, pred_splice, y_psi, loss_type='mse')
-                loss_e += loss_expr.item() + loss_splice.item()
+                loss_splice_binary, loss_splice = L_psi(pred_splice_binary, pred_splice, y_psi, loss_type='mse')
+                loss_e += ((loss_expr.item() * loss_weights[0]) + (loss_splice_binary.item() * loss_weights[1]))
+                if loss_splice is not None:
+                    loss_e += (loss_splice.item() * loss_weights[2])
+                else:
+                    loss_splice = 0.0 # placeholder to keep the code structure consistent, won't be used in the loss calculation
             else:
                 loss_splice = L_psi(pred_splice, y_psi)
                 loss_e += loss_expr.item()
@@ -391,8 +407,8 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     r2_value = r2_score(actual, preds)
     peasonr, pvalue = stats.pearsonr(preds, actual)
     mse = mean_squared_error(preds, actual)
-    print("### Validation ### TPM expresion ###")
-    print('### Loss:', loss_expr.item()/len(validloader))
+    print("\n### Validation ### TPM expresion ###")
+    print('### Loss:', loss_expr.item()/len(validloader), 'Loss weighted:', loss_expr.item()/len(validloader) * loss_weights[0].item())
     print('### Min-Max Expression:', min_max_expr)
     print("### MSE:", mse, "R²:", r2_value, 'PeasonR:', peasonr)
     print("###"*20, "\n")
@@ -405,8 +421,8 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         r2_value_psi = 0
         peasonr_psi = 0
         mse_psi = 0
-    print("### Validation ### PSI expression ###")
-    print('### Loss:', loss_splice.item()/len(validloader))
+    print("\n### Validation ### PSI expression ###")
+    print('### Loss:', loss_splice.item()/len(validloader), 'Loss weighted:', loss_splice.item()/len(validloader) * loss_weights[2].item())
     print('### Min-Max PSI:', min_max_psi)
     print("### MSE:", mse_psi, "R²:", r2_value_psi, 'PeasonR:', peasonr_psi)
     print("###"*20)

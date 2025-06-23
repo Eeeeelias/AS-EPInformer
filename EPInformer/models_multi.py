@@ -231,6 +231,18 @@ class EPInformer_v2(nn.Module):
                 # nn.Linear(38, 8), # 2kb nn.Linear(101, 8)
                 nn.ELU(),
             )
+            self.segment_conv_out = nn.Sequential(
+                nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 4)),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 6)),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=32, kernel_size=(1, 1)),
+                nn.ELU(),
+                nn.Linear(40, int(self.out_dim/32)), # added 40 to account for the segment length
+                nn.ELU(),
+            )
         
         if self.useFeat:
             feat_n = 9 if self.usePromoterSignal else 8
@@ -247,15 +259,17 @@ class EPInformer_v2(nn.Module):
         self.pToSpliceBinary = nn.Sequential(
             nn.Linear(self.out_dim+feat_n, 128),
             nn.ReLU(),
-            nn.Linear(128, 1),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
         )
 
         self.pToSplice = nn.Sequential(
             nn.Linear(self.out_dim+feat_n, 128),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(128, 1),
+            nn.Linear(64, 1),
             # nn.Sigmoid()  
         )
         self.add_pos_conv = nn.Sequential(
@@ -264,6 +278,13 @@ class EPInformer_v2(nn.Module):
                 nn.Conv1d(in_channels = self.out_dim, out_channels=self.out_dim, kernel_size=1),
                 nn.ReLU(),
         )
+
+    def shared_parameters(self):
+        """
+        Returns a list of parameters that are shared across the model.
+        This is useful for optimizers that need to know which parameters to update.
+        """
+        return list(self.attn_encoder.parameters()) + list(self.add_pos_conv.parameters())
 
     def forward(self, pe_seq, exon_seq, rna_feat=None, extraFeat=None):
         # if enhancers_padding_mask is None:
@@ -290,19 +311,53 @@ class EPInformer_v2(nn.Module):
             pe_flatten_embed = self.add_pos_conv(torch.concat([pe_flatten_embed, extraFeat], axis=-1).permute(0,2,1)).permute(0,2,1) # type: ignore
         attn_list = []
 
-        for i in range(self.n_encoder):
-            pe_flatten_embed, attn = self.attn_encoder[i](pe_flatten_embed, enhancers_padding_mask=enhancers_padding_mask, 
-                                                          attn_mask=self.attn_mask.to(self.device))
+        # split self.n_encode in half (e.g. if n_encoder=6 then first 3 layers are for enhancers and last 3 layers for segments)
+        n_encoder_half = self.n_encoder // 2
+        pe_flatten_embed_expr = pe_flatten_embed
+        pe_flatten_embed_splice = pe_flatten_embed
+        for i in range(n_encoder_half):
+            pe_flatten_embed_expr, attn = self.attn_encoder[i](pe_flatten_embed_expr, enhancers_padding_mask=enhancers_padding_mask, 
+                                                                            attn_mask=self.attn_mask.to(self.device))
+            attn_list.append(attn.unsqueeze(0))
+            pe_flatten_embed_splice, attn = self.attn_encoder[self.n_encoder-i-1](pe_flatten_embed_splice, enhancers_padding_mask=enhancers_padding_mask, 
+                                                                                        attn_mask=self.attn_mask.to(self.device))
             attn_list.append(attn.unsqueeze(0))
 
-        p_embed = torch.flatten(pe_flatten_embed[:,0,:], start_dim=1)
-        if self.useFeat:
-            p_embed = torch.cat([p_embed, rna_feat], dim=-1) # type: ignore
+        p_embed_expr = torch.flatten(pe_flatten_embed_expr[:,0,:], start_dim=1)
+        p_embed_splice = torch.flatten(pe_flatten_embed_splice[:,0,:], start_dim=1)
 
-        p_expr = self.pToExpr(p_embed)
+        if self.useFeat:
+            p_embed_expr = torch.cat([p_embed_expr, rna_feat], dim=-1) # type: ignore
+            p_embed_splice = torch.cat([p_embed_splice, rna_feat], dim=-1) # type: ignore
+
+        p_expr = self.pToExpr(p_embed_expr)
 
         if self.use_exon_data:
-            p_splice_binary_logits = self.pToSpliceBinary(p_embed)
-            p_splice_regression = self.pToSplice(p_embed)
+            p_splice_binary_logits = self.pToSpliceBinary(p_embed_splice)
+            p_splice_regression = self.pToSplice(p_embed_splice)
 
         return p_expr, p_splice_binary_logits, p_splice_regression, torch.cat(attn_list)
+
+
+class WeightedLoss(nn.Module):
+    """
+    Class to compute a weighted loss for the EPInformer model that combines expression, splice binary, 
+    and splice regression losses. The weights for each loss component are learned parameters.
+    """
+    def __init__(self):
+        super(WeightedLoss, self).__init__()
+        self.log_weight_expr = nn.Parameter(torch.tensor(1.0), requires_grad=True)
+        self.log_weight_splice_binary = nn.Parameter(torch.tensor(1.0), requires_grad=True)
+        self.log_weight_splice_reg = nn.Parameter(torch.tensor(1.0), requires_grad=True)
+
+    def forward(self, loss_expr, loss_splice_binary, loss_splice_regression):
+        weight_expr = torch.exp(self.log_weight_expr)
+        weight_splice_binary = torch.exp(self.log_weight_splice_binary)
+        weight_splice_regression = torch.exp(self.log_weight_splice_reg)
+
+        weighted_loss = (weight_expr * loss_expr + 
+                         weight_splice_binary * loss_splice_binary + 
+                         weight_splice_regression * loss_splice_regression)
+        
+        return weighted_loss, weight_expr, weight_splice_binary, weight_splice_regression
+    

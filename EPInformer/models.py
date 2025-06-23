@@ -252,3 +252,15 @@ class EPInformer_v2(nn.Module):
             p_embed = torch.cat([p_embed, rna_feat], dim=-1) # type: ignore
         p_expr = self.pToExpr(p_embed)
         return p_expr, torch.tensor([1]).to(self.device), torch.tensor([1]).to(self.device), torch.cat(attn_list)
+
+
+class WeightedLoss(nn.Module):
+    def __init__(self, weight=None):
+        super(WeightedLoss, self).__init__()
+        if weight is None:
+            self.weight = torch.tensor([1.0])
+        else:
+            self.weight = weight
+
+    def forward(self, loss):
+        return loss * self.weight

@@ -37,6 +37,7 @@ parser.add_argument('--include_exons', help='Include exons in the input data', a
 parser.add_argument('--single_events', help='Use single events per gene for training', action='store_true')
 parser.add_argument('--z_score_normalise', help='Apply z-score normalization to the training data', action='store_true')
 parser.add_argument('--event_genes', action='store_true', help='Use only genes that also have events in the training set')
+parser.add_argument('--learn_loss_weights', action='store_true', help='Learn loss weights for the splicing and expression tasks')
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -116,9 +117,9 @@ args = parser.parse_args()
 
 #### import the right EPinformer model
 if args.expr_assay == 'multi' or args.expr_assay == 'transcript' or args.include_exons:
-    from EPInformer.models_multi import EPInformer_v2, enhancer_predictor_256bp
+    from EPInformer.models_multi import EPInformer_v2, enhancer_predictor_256bp, WeightedLoss
 else:
-    from EPInformer.models import EPInformer_v2, enhancer_predictor_256bp
+    from EPInformer.models import EPInformer_v2, enhancer_predictor_256bp, WeightedLoss
 
 
 cell = args.cell
@@ -197,16 +198,25 @@ for fi in fold_list:
         checkpoint = torch.load(f"./trained_models/pretrained_enhancer_encoder/{fold_i}_best_{pt_model_name}_checkpoint.pt", 
                                 weights_only=False, map_location=device)
         print('Loading pretrained model ...', pt_model_name)
-        model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=pretrained_convNet.encoder, 
+        model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=pretrained_convNet.encoder,
                               n_enhancer=n_enhancers, out_dim=64, n_extraFeat=n_extraFeat, device=device, 
                               exon_data=args.include_exons).to(device)
     else:
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=None, n_enhancer=n_enhancers, 
                               out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=args.include_exons).to(device)
 
+    if args.learn_loss_weights:
+        print("Learning loss weights for the splicing and expression tasks.")
+        weighted_loss = WeightedLoss().to(device)
+    else:
+        weighted_loss = None
+
     model = model.to(device)
     model.name = model.name.replace('EPInformerV2', args.model_type) + '.' +  cell + '.' + expr_type
+
     utils.train(model, train_ds, valid_dataset=valid_ds, EPOCHS=n_epoch, model_name = model.name, fold_i=fi, 
-                batch_size=batch_size, device=device, saved_model_path=saved_model_path, predict=expr_type)
+                batch_size=batch_size, device=device, saved_model_path=saved_model_path, predict=expr_type, 
+                loss_class=weighted_loss)
+    
     test_df = utils.test(model, test_ds, model_name = model.name, saved_model_path=saved_model_path, fold_i=fi, 
                          batch_size=batch_size, normals=normals, device=device, predict=args.expr_assay)
