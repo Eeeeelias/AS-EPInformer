@@ -200,7 +200,7 @@ class EarlyStopping:
 
 def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, fixed_encoder = False, 
           n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, device = 'cuda', stratify=None, 
-          EPOCHS=100, valid_size=1000, predict='multi', loss_class=None):
+          EPOCHS=100, valid_size=1000, predict='multi', loss_class=None, weigh_samples=False):
     if not os.path.exists(saved_model_path):
         os.mkdir(saved_model_path)
     if not os.path.exists(saved_model_path + "/losses.csv"):
@@ -230,9 +230,10 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     early_stopping = EarlyStopping(patience=3, verbose=True, 
                                    path= saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt")
 
-    dw = DenseWeight(alpha=0.6)
+    
     # get all PSI values from training dataset
-    if predict == 'multi':
+    if predict == 'multi' and weigh_samples:
+        dw = DenseWeight(alpha=0.6)
         all_psi = []
         for data in trainloader:
             _, _, _, _, _, y_psi, _ = data
@@ -244,9 +245,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         dw.fit(np.array(all_psi))
     else:
         dw = None
+
     L_expr = nn.SmoothL1Loss()
     L_splice = hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
-    # loss_weights = (1.0, 1.0) if predict == 'multi' else (1.0, 0.0)
     learned_loss = True if loss_class is not None else False
     all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters())
     optimizer = torch.optim.AdamW(all_params, lr=learning_rate, weight_decay=1e-6)
@@ -290,8 +291,10 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             
             if dw is not None:
                 loss_splice_binary, loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='dense', dw=dw)
+            elif predict == 'multi' and dw is None:
+                loss_splice_binary, loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='l1')
             else:
-                loss_splice = L_splice(pred_splice, y_psi) # splicing loss here
+                loss_splice = L_splice(pred_splice, y_psi)
                 loss_splice_binary = 0.0 # placeholder to keep the code structure consistent
 
             expression_loss += loss_expr.item()

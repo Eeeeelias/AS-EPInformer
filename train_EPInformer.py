@@ -38,6 +38,7 @@ parser.add_argument('--single_events', help='Use single events per gene for trai
 parser.add_argument('--z_score_normalise', help='Apply z-score normalization to the training data', action='store_true')
 parser.add_argument('--event_genes', action='store_true', help='Use only genes that also have events in the training set')
 parser.add_argument('--learn_loss_weights', action='store_true', help='Learn loss weights for the splicing and expression tasks')
+parser.add_argument('--weigh_samples', action='store_true', help='Weigh samples based on their frequency in the training set')
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -216,7 +217,7 @@ for fi in fold_list:
 
     utils.train(model, train_ds, valid_dataset=valid_ds, EPOCHS=n_epoch, model_name = model.name, fold_i=fi, 
                 batch_size=batch_size, device=device, saved_model_path=saved_model_path, predict=expr_type, 
-                loss_class=weighted_loss)
+                loss_class=weighted_loss, weigh_samples=args.weigh_samples)
     
     test_df = utils.test(model, test_ds, model_name = model.name, saved_model_path=saved_model_path, fold_i=fi, 
                          batch_size=batch_size, normals=normals, device=device, predict=args.expr_assay)
