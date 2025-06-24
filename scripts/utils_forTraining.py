@@ -1,77 +1,26 @@
 # -*- coding: utf-8 -*-
-
-import torch
 import os
+import sys
 import numpy as np
 import pandas as pd
 # torch
-import torch.nn as nn
-# import torch.nn.functional as F
-import torch.optim
+import torch
+from torch import nn
 import torch.utils.data as data_utils
-from torch.utils.data import Subset, Dataset
+from torch.utils.data import Subset
 from denseweight import DenseWeight
 
-import sys
-import argparse
-
 from scipy import stats
-# import sklearn
 from sklearn.metrics import mean_squared_error, r2_score
-from tqdm import tqdm
 from sklearn.model_selection import train_test_split
-# logging
 from tqdm import tqdm
+# logging
 # from model.EPInformer import EPInformer_v2, enhancer_predictor_256bp
-import h5py
-import glob
+from scripts.loss_functions import hurdle_loss
 
 def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
-
-def anti_mse_loss(pred, target, alpha=0.3):
-    mse = (pred - target) ** 2
-    confidence_penalty = pred - pred ** 2
-    return (mse + alpha * confidence_penalty)
-
-def dense_loss(pred, target, dw): # from https://link.springer.com/article/10.1007/s10994-021-06023-5
-    if dw is None:
-        return nn.SmoothL1Loss()(pred, target)
-    weight = dw(target.float().cpu().detach().numpy()) 
-    loss = anti_mse_loss(pred, target, alpha=1).cpu().detach().numpy()
-    weighted_loss = weight * loss
-    return torch.tensor(weighted_loss.mean(), dtype=torch.float32, device=pred.device)
-
-def hurdle_loss(binary_logits, splicing_pred, target, loss_type='l1', dw=None):
-    binary_target = (target != 1).float()
-
-    binary_target = binary_target.unsqueeze(-1)
-    bce_loss_fn = nn.BCEWithLogitsLoss()
-    bce_loss = bce_loss_fn(binary_logits, binary_target)
-
-    # regression part only for values != 1
-    regression_mask = (target != 1)
-    if regression_mask.any():
-        if loss_type == 'l1':
-            regression_loss_fn = nn.SmoothL1Loss()
-        elif loss_type == 'mse':
-            regression_loss_fn = nn.MSELoss()
-        elif loss_type == 'dense': 
-            regression_loss_fn = lambda x, y: dense_loss(x, y, dw)
-        else:
-            raise ValueError("Unsupported loss type: {}".format(loss_type))
-
-        regression_loss = regression_loss_fn(splicing_pred[regression_mask], target[regression_mask])
-    else:
-        regression_loss = None
-
-    return bce_loss, regression_loss
-
-
-def anti_bias_loss(mse_loss, pred, alpha=0.3):
-    variance_penalty = -torch.var(pred)
-    return mse_loss + alpha * variance_penalty
 
 
 def combine_hurdle_outputs(binary_logits, splicing_pred, threshold=0.5):
@@ -82,6 +31,28 @@ def combine_hurdle_outputs(binary_logits, splicing_pred, threshold=0.5):
     final_pred = torch.where(is_not_1, splicing_pred.squeeze(-1), torch.ones_like(splicing_pred.squeeze(-1)))
 
     return list(final_pred.cpu().detach().numpy())
+
+
+def get_sample_weights(trainloader, device='cpu'):
+    dw = DenseWeight(alpha=0.6)
+    psi_reg = []
+    psi_binary = []
+    for data in trainloader:
+        _, _, _, _, _, y_psi, _ = data
+        flat_psi = y_psi.flatten().cpu().numpy()
+        # add to psi binary 1 if the value is 1.0, else 0
+        psi_binary.extend((flat_psi == 1.0).astype(int))
+        # filter out 1.0 values since they are protected by the hurdle
+        flat_psi = flat_psi[flat_psi != 1.0]
+        if len(flat_psi) > 0:
+            psi_reg.extend(flat_psi)
+    dw.fit(np.array(psi_reg))
+
+    num_positive = np.sum(np.array(psi_binary) == 1)
+    num_negative = len(psi_binary) - num_positive
+    pos_weight = torch.tensor(num_negative / num_positive, dtype=torch.float32, device=device)
+    return dw, pos_weight
+
 
 class Logger():
     """A logging class that can report or save metrics.
@@ -198,16 +169,18 @@ class EarlyStopping:
         # torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
 
-def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, fixed_encoder = False, 
-          n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, device = 'cuda', stratify=None, 
-          EPOCHS=100, valid_size=1000, predict='multi', loss_class=None, weigh_samples=False):
+
+def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, 
+          fixed_encoder = False, n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, 
+          device = 'cuda', stratify=None, epochs=100, valid_size=1000, predict='multi', loss_class=None, 
+          weigh_samples=False):
     if not os.path.exists(saved_model_path):
         os.mkdir(saved_model_path)
     if not os.path.exists(saved_model_path + "/losses.csv"):
-        loss_file = open(saved_model_path + "/losses.csv", "w")
+        loss_file = open(saved_model_path + "/losses.csv", "w", encoding='utf-8')
         loss_file.write("fold,epoch,training_loss,expresssion_loss,splice_loss,validation_mse,validation_r2\n")
     else:
-        loss_file = open(saved_model_path + "/losses.csv", "a")
+        loss_file = open(saved_model_path + "/losses.csv", "a", encoding='utf-8')
 
     if valid_dataset is not None:
         train_ds = training_dataset
@@ -227,28 +200,24 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
-    early_stopping = EarlyStopping(patience=3, verbose=True, 
+    early_stopping = EarlyStopping(patience=3, verbose=True,
                                    path= saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt")
 
     
     # get all PSI values from training dataset
     if predict == 'multi' and weigh_samples:
-        dw = DenseWeight(alpha=0.6)
-        all_psi = []
-        for data in trainloader:
-            _, _, _, _, _, y_psi, _ = data
-            flat_psi = y_psi.flatten().cpu().numpy()
-            # filter out 1.0 values since they are protected by the hurdle
-            flat_psi = flat_psi[flat_psi != 1.0]
-            if len(flat_psi) > 0:
-                all_psi.extend(flat_psi)
-        dw.fit(np.array(all_psi))
+        dw, pos_weight = get_sample_weights(trainloader, device=device)
+        print('Dense weight:', dw)
+        print('Positive weight:', pos_weight)
     else:
         dw = None
+        pos_weight = None
 
+    # Loss functions
     L_expr = nn.SmoothL1Loss()
     L_splice = hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
     learned_loss = True if loss_class is not None else False
+
     all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters())
     optimizer = torch.optim.AdamW(all_params, lr=learning_rate, weight_decay=1e-6)
     net.train()
@@ -262,7 +231,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     print('Model name:', net.name)
     lrs = []
     # last_loss = None
-    for epoch in range(EPOCHS):
+    for epoch in range(epochs):
         net.train()
         print('learning rate:', get_lr(optimizer))
         running_loss = 0
@@ -273,8 +242,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         for data in tqdm(trainloader):
             # print(inputs.size())
             optimizer.zero_grad()
-            input_PE, input_seg, input_feat, input_dist, y_expr, y_psi, eid = data
-            input_PE = input_PE.float().to(device)
+            input_pe, input_seg, input_feat, input_dist, y_expr, y_psi, eid = data
+            input_pe = input_pe.float().to(device)
 
             input_seg = input_seg.float().to(device)
             input_feat = input_feat.float().to(device)
@@ -283,14 +252,13 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
 
-
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
+            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist)
 
             loss_expr = L_expr(pred_expr, y_expr)
-            #loss_expr = anti_bias_loss(loss_expr, pred_expr, alpha=0.3) # anti-bias loss
-            
+
             if dw is not None:
-                loss_splice_binary, loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='dense', dw=dw)
+                loss_splice_binary, loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='dense',
+                                                           dw=dw, pos_weight=pos_weight)
             elif predict == 'multi' and dw is None:
                 loss_splice_binary, loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='l1')
             else:
@@ -300,13 +268,21 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             expression_loss += loss_expr.item()
             splice_loss += loss_splice.item() if loss_splice is not None else 0.0
 
-            loss = loss_expr
+            # adding all losses together
+            weight_e, weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(0.0, device=device), torch.tensor(0.0, device=device)
+
             if learned_loss:
                 loss, weight_e, weight_b, weight_s = loss_class(expression_loss, loss_splice_binary, splice_loss)
+
             elif predict == 'multi':
-                weight_e, weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(1.0, device=device), torch.tensor(1.0, device=device)
+                weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(1.0, device=device)
+                
+                loss = (loss_expr * weight_e) + (loss_splice_binary * weight_b)
+                if loss_splice is not None:
+                    loss += (loss_splice * weight_s)
+
             else:
-                weight_e, weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(0.0, device=device), torch.tensor(0.0, device=device)
+                loss = loss_expr
 
             loss_e += ((loss_expr.item() * weight_e) + (loss_splice_binary.item() * weight_b))
             if loss_splice is not None:
@@ -317,7 +293,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             optimizer.step()
             running_loss += loss.item()
 
-        print('[Epoch %d] loss: %.9f' % (epoch + 1, running_loss/len(trainloader)))
+        print(f"[Epoch {epoch + 1}] loss: {running_loss/len(trainloader)}")
         print('Training Loss:', loss_e.item()/len(trainloader))
         print('Loss weights:', weight_e.item(), weight_b.item(), weight_s.item())
         # log_cols = ['Epoch', 'Training_Loss', 'Validation_Loss', 'Validation_PearsonR_allGene',
@@ -327,7 +303,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         val_mse_all, val_r2_all, val_pr_all = validate(net, valid_ds, n_enhancers=n_enhancers, device=device, 
                                                        predict=predict, loss_weights=(weight_e, weight_b, weight_s))
         val_r2 = val_r2_all
-        val_pr_wE, val_r2_wE = val_pr_all, val_r2_all
+        val_pr_we, val_r2_we = val_pr_all, val_r2_all
         print('Valdaition R square all:', val_r2_all)
         early_stopping(-val_r2, net, epoch)
         loss_file.write(f"{fold_i},{epoch+1},{running_loss/len(trainloader)},{expression_loss/len(trainloader)}," \
@@ -336,7 +312,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         if model_logger is not None:
             label_type = net.name.split('.')[-1]
             model_logger.add([fold_i, epoch, running_loss/len(trainloader), val_mse_all, val_pr_all, val_r2_all, 
-                              val_pr_wE, val_r2_wE, early_stopping.counter, label_type])
+                              val_pr_we, val_r2_we, early_stopping.counter, label_type])
             # model_logger.save("./EPInfomrer_log/{}.crossValid.log".format(net.name.replace('.'+label_type, '')))
         if early_stopping.early_stop:
             print("Early stopping")
@@ -349,7 +325,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     net.eval()
     L_expr = nn.SmoothL1Loss()
     L_psi = hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
-    
+
     with torch.no_grad():
         preds = []
         actual = []
@@ -360,8 +336,8 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         min_max_psi = [0,0]
         for data in validloader:
             # print(inputs.size())
-            input_PE, input_seg, input_feat, input_dist, y_expr, y_psi, eid = data
-            input_PE = input_PE.float().to(device)
+            input_pe, input_seg, input_feat, input_dist, y_expr, y_psi, _ = data
+            input_pe = input_pe.float().to(device)
             input_seg = input_seg.float().to(device)
             input_feat = input_feat.float().to(device)
             # input_dist = input_dist.long().to(device)
@@ -371,7 +347,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
             # print(input_P.shape, input_E.shape, input_Emask.shape)
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
+            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist)
 
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
@@ -391,7 +367,8 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
                 if loss_splice is not None:
                     loss_e += (loss_splice.item() * loss_weights[2])
                 else:
-                    loss_splice = 0.0 # placeholder to keep the code structure consistent, won't be used in the loss calculation
+                    # placeholder to keep the code structure consistent, won't be used in the loss calculation
+                    loss_splice = 0.0
             else:
                 loss_splice = L_psi(pred_splice, y_psi)
                 loss_e += loss_expr.item()
@@ -408,7 +385,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
                 min_max_psi = [np.min(outputs_psi), np.max(outputs_psi)]
 
     r2_value = r2_score(actual, preds)
-    peasonr, pvalue = stats.pearsonr(preds, actual)
+    peasonr, _ = stats.pearsonr(preds, actual)
     mse = mean_squared_error(preds, actual)
     print("\n### Validation ### TPM expresion ###")
     print('### Loss:', loss_expr.item()/len(validloader), 'Loss weighted:', loss_expr.item()/len(validloader) * loss_weights[0].item())
@@ -418,7 +395,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
 
     try:
         r2_value_psi = r2_score(actual_psi, preds_psi)
-        peasonr_psi, pvalue = stats.pearsonr(preds_psi, actual_psi)
+        peasonr_psi, _ = stats.pearsonr(preds_psi, actual_psi)
         mse_psi = mean_squared_error(preds_psi, actual_psi)
     except ValueError:
         r2_value_psi = 0
@@ -449,7 +426,8 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
     # net.load_state_dict(torch.load("./K562_10crx_models/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt"))
     # print("Load the best model from fold_" + str(fold_i) + "_"+model_type+"_"+model_name+"_checkpoint.pt", )
     if saved_model_path is not None:
-        checkpoint = torch.load(saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt", weights_only=False)
+        checkpoint = torch.load(saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt", 
+                                weights_only=False)
         net.load_state_dict(checkpoint['model_state_dict'])
         print(model_name,'loaded!')
         
@@ -466,15 +444,15 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
 
         ensid_list = []
         for data in tqdm(testloader):
-            input_PE, input_seg, input_feat, input_dist, y_expr, y_psi, eid = data
-            input_PE = input_PE.float().to(device)
+            input_pe, input_seg, input_feat, input_dist, y_expr, y_psi, eid = data
+            input_pe = input_pe.float().to(device)
             input_seg = input_seg.float().to(device)
             input_feat = input_feat.float().to(device)
             # input_dist = input_dist.long().to(device)
             input_dist = input_dist.float().to(device)
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_PE, input_seg, input_feat, input_dist)
+            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist)
 
             if normals:
                 uncorr_pred_ep = pred_expr.clone()
@@ -484,7 +462,7 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
 
                 pred_expr = (pred_expr * normals['std_expr']) + normals['mean_expr']
                 y_expr = (y_expr * normals['std_expr']) + normals['mean_expr']
-                
+          
                 corr_pred_splice = []
                 corr_y_psi = []
                 for p_splice, y_splice in zip(pred_splice, y_psi):
