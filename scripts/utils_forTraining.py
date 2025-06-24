@@ -74,11 +74,10 @@ class Logger():
     def __init__(self, names, verbose=False):
         self.names = names
         self.verbose = verbose
+        self.data = {name: [] for name in self.names}
 
     def start(self):
         """Begin the recording process."""
-
-        self.data = {name: [] for name in self.names}
 
         if self.verbose:
             print("\t".join(self.names))
@@ -242,7 +241,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         for data in tqdm(trainloader):
             # print(inputs.size())
             optimizer.zero_grad()
-            input_pe, input_seg, input_feat, input_dist, y_expr, y_psi, eid = data
+            input_pe, input_seg, input_feat, input_dist, y_expr, y_psi, _ = data
             input_pe = input_pe.float().to(device)
 
             input_seg = input_seg.float().to(device)

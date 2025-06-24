@@ -1,19 +1,16 @@
-import sys
 import argparse
-
 from datetime import datetime
-import os
-import scripts.utils_forTraining as utils
-import scripts.promoter_enhancer_dataset as pe_dataset
-import pandas as pd
-import numpy as np
-from collections import defaultdict
 import random
+from collections import defaultdict
 
 from scipy import stats
 from tqdm import tqdm
+import pandas as pd
+import numpy as np
 import torch
 from torch.utils.data import Subset, Dataset
+import scripts.utils_forTraining as utils
+import scripts.promoter_enhancer_dataset as pe_dataset
 
 parser = argparse.ArgumentParser()
 def list_of_strings(arg):
@@ -80,7 +77,7 @@ def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float
     Returns:
     - A tuple of three lists: (train_ids, val_ids, test_ids)
     """
-    print(f"Splitting gene-aware")
+    print("Splitting gene-aware")
     assert abs(train_frac + val_frac + test_frac - 1.0) < 1e-6, "Fractions must sum to 1."
 
     # Group full IDs by their shared key (0-th element of the split)
@@ -111,7 +108,8 @@ def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float
     return train_indices, val_indices, test_indices
 
 # example
-# python train_EPInformer.py --cell K562  --model_type EPInformer-PE-Activity --expr_assay CAGE --use_pretrained_encoder --batch_size 16
+# python train_EPInformer.py --cell K562  --model_type EPInformer-PE-Activity --expr_assay CAGE 
+# --use_pretrained_encoder --batch_size 16
 
 ##### parameter ######
 args = parser.parse_args()
@@ -143,6 +141,8 @@ elif args.model_type == 'EPInformer-PE-Activity':
     n_extraFeat = 2
 elif args.model_type == 'EPInformer-PE-Activity-HiC':
     n_extraFeat = 3
+else:
+    raise ValueError(f"Unsupported model type: {args.model_type}")
 
 use_pretrained = args.use_pretrained_encoder
 fold_list = args.fold 
@@ -156,12 +156,11 @@ today = datetime.now()   # Get date
 
 datetime_str = today.strftime("%Y-%m-%d-%H")
 split_df = pd.read_csv('./data/leave_chrom_out_crossvalidation_split_18377genes.csv', index_col=0)
-saved_model_path = './trained_models/{}/'.format(datetime_str)
+saved_model_path = f'./trained_models/{datetime_str}/'
 
 if 'all' in fold_list:
     fold_list = list(range(1, 13))
-else:
-    fold_list = fold_list
+
 for fi in fold_list:
     print("-"*10, 'fold', fi, '-'*10)
     fold_i = 'fold_' + str(fi)
@@ -195,7 +194,7 @@ for fi in fold_list:
 
     if use_pretrained:
         pretrained_convNet = enhancer_predictor_256bp()
-        pt_model_name = '{}_seq2activityLog2_leaveChrOut_combinedRS_2bins_bs64_H3K27ac_adamW_erisxdl_r0'.format(cell)
+        pt_model_name = f'{cell}_seq2activityLog2_leaveChrOut_combinedRS_2bins_bs64_H3K27ac_adamW_erisxdl_r0'
         checkpoint = torch.load(f"./trained_models/pretrained_enhancer_encoder/{fold_i}_best_{pt_model_name}_checkpoint.pt", 
                                 weights_only=False, map_location=device)
         print('Loading pretrained model ...', pt_model_name)
@@ -215,7 +214,7 @@ for fi in fold_list:
     model = model.to(device)
     model.name = model.name.replace('EPInformerV2', args.model_type) + '.' +  cell + '.' + expr_type
 
-    utils.train(model, train_ds, valid_dataset=valid_ds, EPOCHS=n_epoch, model_name = model.name, fold_i=fi, 
+    utils.train(model, train_ds, valid_dataset=valid_ds, epochs=n_epoch, model_name = model.name, fold_i=fi, 
                 batch_size=batch_size, device=device, saved_model_path=saved_model_path, predict=expr_type, 
                 loss_class=weighted_loss, weigh_samples=args.weigh_samples)
     

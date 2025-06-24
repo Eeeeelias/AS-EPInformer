@@ -5,7 +5,7 @@ import torch.nn as nn
 def anti_mse_loss(pred, target, alpha=0.3):
     mse = (pred - target) ** 2
     confidence_penalty = pred - pred ** 2
-    return (mse + alpha * confidence_penalty)
+    return mse + alpha * confidence_penalty
 
 
 def dense_loss(pred, target, dw): # from https://link.springer.com/article/10.1007/s10994-021-06023-5
@@ -34,7 +34,7 @@ def hurdle_loss(binary_logits, splicing_pred, target, loss_type='l1', dw=None, p
         elif loss_type == 'dense': 
             regression_loss_fn = lambda x, y: dense_loss(x, y, dw)
         else:
-            raise ValueError("Unsupported loss type: {}".format(loss_type))
+            raise ValueError(f"Unsupported loss type: {loss_type}")
 
         regression_loss = regression_loss_fn(splicing_pred[regression_mask], target[regression_mask])
     else:

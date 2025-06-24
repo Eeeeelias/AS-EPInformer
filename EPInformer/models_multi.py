@@ -1,20 +1,16 @@
-from torch import Tensor
-import torch
-import torch.nn as nn
-from torch.nn import Transformer, TransformerEncoderLayer, TransformerDecoderLayer
-import math
-from sklearn.metrics import mean_squared_error
 import copy
+import warnings
 import numpy as np
 import pandas as pd
 from scipy import stats
-# import time
-# import tqdm
-import warnings
+
+from torch import Tensor
+import torch
+import torch.nn as nn
 import torch.nn.functional as F
-# import einops
 import torch.utils.data as data_utils
 from torch.utils.data import Dataset, DataLoader
+
 warnings.filterwarnings('ignore')
 
 def get_clones(module, N):
@@ -248,6 +244,7 @@ class EPInformer_v2(nn.Module):
             feat_n = 9 if self.usePromoterSignal else 8
         else:
             feat_n = 0
+
         self.pToExpr = nn.Sequential(
             nn.Linear(self.out_dim+feat_n, 128),
             nn.ReLU(),
@@ -335,6 +332,9 @@ class EPInformer_v2(nn.Module):
         if self.use_exon_data:
             p_splice_binary_logits = self.pToSpliceBinary(p_embed_splice)
             p_splice_regression = self.pToSplice(p_embed_splice)
+        else:
+            p_splice_binary_logits = None
+            p_splice_regression = None
 
         return p_expr, p_splice_binary_logits, p_splice_regression, torch.cat(attn_list)
 
@@ -345,7 +345,7 @@ class WeightedLoss(nn.Module):
     and splice regression losses. The weights for each loss component are learned parameters.
     """
     def __init__(self):
-        super(WeightedLoss, self).__init__()
+        super().__init__()
         self.log_weight_expr = nn.Parameter(torch.tensor(1.0), requires_grad=True)
         self.log_weight_splice_binary = nn.Parameter(torch.tensor(1.0), requires_grad=True)
         self.log_weight_splice_reg = nn.Parameter(torch.tensor(1.0), requires_grad=True)
