@@ -36,6 +36,7 @@ parser.add_argument('--z_score_normalise', help='Apply z-score normalization to 
 parser.add_argument('--event_genes', action='store_true', help='Use only genes that also have events in the training set')
 parser.add_argument('--learn_loss_weights', action='store_true', help='Learn loss weights for the splicing and expression tasks')
 parser.add_argument('--weigh_samples', action='store_true', help='Weigh samples based on their frequency in the training set')
+parser.add_argument('--short_run', action='store_true', help='Run a short version for testing purposes')
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -65,7 +66,7 @@ def create_set_indices(all_ids, train_ratio=0.8, valid_ratio=0.1, events=False, 
     return train_ids, valid_ids, test_ids
 
 def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float = 0.15, test_frac: float = 0.15, 
-                        seed: int = 42) -> tuple[list[str], list[str], list[str]]:
+                        seed: int = 42, short_run=False) -> tuple[list[str], list[str], list[str]]:
     """
     Splits event IDs into train/val/test sets, grouping by gene of each ID.
     
@@ -104,6 +105,12 @@ def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float
     train_indices = [idx for k in train_keys for idx in key_to_indices[k]]
     val_indices = [idx for k in val_keys for idx in key_to_indices[k]]
     test_indices = [idx for k in test_keys for idx in key_to_indices[k]]
+
+    if short_run:
+        # Limit the number of samples for a short run
+        train_indices = train_indices[:2000]
+        val_indices = val_indices[:100]
+        test_indices = test_indices[:100]
 
     return train_indices, val_indices, test_indices
 
@@ -161,6 +168,9 @@ saved_model_path = f'./trained_models/{datetime_str}/'
 if 'all' in fold_list:
     fold_list = list(range(1, 13))
 
+if args.short_run:
+    fold_list = fold_list[:1]  # For testing, only use the first fold
+
 for fi in fold_list:
     print("-"*10, 'fold', fi, '-'*10)
     fold_i = 'fold_' + str(fi)
@@ -178,7 +188,7 @@ for fi in fold_list:
     #                                                    events=True, seed=42+int(fi))
     if args.include_exons:
         train_idx, valid_idx, test_idx = split_multitask_ids(all_ds.event_keys, train_frac=0.8, val_frac=0.1, 
-                                                             test_frac=0.1, seed=42+int(fi))
+                                                             test_frac=0.1, seed=42+int(fi), short_run=args.short_run)
     else:
         train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1,
                                                             events=True, seed=42+int(fi))

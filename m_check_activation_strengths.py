@@ -1,7 +1,5 @@
-from EPInformer.models_multi import EPInformer_v2, enhancer_predictor_256bp
-from scripts.utils import prepare_input
-import scripts.utils_forTraining as train
-import scripts.promoter_enhancer_dataset as ped
+from collections import defaultdict
+import random
 import pandas as pd
 import numpy as np
 import seaborn as sns
@@ -12,9 +10,11 @@ import torch
 from torch.utils.data import Subset, Dataset
 from sklearn.metrics import r2_score
 import torch.utils.data as data_utils
-import scripts.promoter_enhancer_dataset as pe_dataset
-from collections import defaultdict
-import random
+
+from EPInformer.models_multi import EPInformer_v2, enhancer_predictor_256bp
+from scripts.utils import prepare_input
+import scripts.utils_forTraining as train
+import scripts.promoter_enhancer_dataset as ped
 
 split_df = pd.read_csv('./data/leave_chrom_out_crossvalidation_split_18377genes.csv', index_col=0)
 
@@ -98,7 +98,7 @@ train_ensid = split_df[split_df[fold_i] == 'train'].index
 valid_ensid = split_df[split_df[fold_i] == 'valid'].index
 test_ensid = split_df[split_df[fold_i] == 'test'].index
 
-all_ds = pe_dataset.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell,
+all_ds = ped.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell,
                                                   n_extraFeat=n_extraFeat, usePromoterSignal=True,
                                                   n_enhancers=n_enhancers, hic_threshold=None,
                                                   distance_threshold=distance_threshold, include_exons=True,

@@ -8,6 +8,9 @@ import torch
 from torch import nn
 import torch.utils.data as data_utils
 from torch.utils.data import Subset
+from torch.nn.utils import parameters_to_vector
+from torch.nn.functional import cosine_similarity
+
 from denseweight import DenseWeight
 
 from scipy import stats
@@ -52,6 +55,14 @@ def get_sample_weights(trainloader, device='cpu'):
     num_negative = len(psi_binary) - num_positive
     pos_weight = torch.tensor(num_negative / num_positive, dtype=torch.float32, device=device)
     return dw, pos_weight
+
+
+def get_grads(model):
+    grads = []
+    for p in model.parameters():
+        if p.grad is not None:
+            grads.append(p.grad.detach().clone().flatten())
+    return torch.cat(grads)
 
 
 class Logger():
@@ -227,6 +238,13 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         print("Using XPU device for training")
         net, optimizer = ipex.optimize(net, optimizer=optimizer)
 
+    # Print parameter names included in the optimizer
+    for name, param in net.named_parameters():
+        if param.requires_grad:
+            found = any(param is p for g in optimizer.param_groups for p in g['params'])
+            if not found:
+                print(f"⚠️ Not in optimizer: {name}")
+
     print('Model name:', net.name)
     lrs = []
     # last_loss = None
@@ -274,7 +292,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
                 loss, weight_e, weight_b, weight_s = loss_class(expression_loss, loss_splice_binary, splice_loss)
 
             elif predict == 'multi':
-                weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(1.0, device=device)
+                if False:
+                    weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(1.0, device=device)
                 
                 loss = (loss_expr * weight_e) + (loss_splice_binary * weight_b)
                 if loss_splice is not None:
@@ -282,6 +301,32 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
             else:
                 loss = loss_expr
+
+            # DIAGNOSTICS
+            loss_expr.backward(retain_graph=True)
+            grads_expr = get_grads(net)
+            optimizer.zero_grad()
+
+            loss_splice_binary.backward(retain_graph=True)
+            grads_splice_binary = get_grads(net)
+            optimizer.zero_grad()
+
+            loss_splice.backward(retain_graph=True)
+            grads_splice = get_grads(net)
+            optimizer.zero_grad()
+
+            cos_expr_splice_binary = cosine_similarity(grads_expr.unsqueeze(0), grads_splice_binary.unsqueeze(0)).item()
+            cos_expr_splice = cosine_similarity(grads_expr.unsqueeze(0), grads_splice.unsqueeze(0)).item()
+            cos_splice_binary_splice = cosine_similarity(grads_splice_binary.unsqueeze(0), grads_splice.unsqueeze(0)).item()
+            
+            print(f"Cosine(expr, splice_binary): {cos_expr_splice_binary:.4f}")
+            print(f"Cosine(expr, splice): {cos_expr_splice:.4f}")
+            print(f"Cosine(splice_binary, splice): {cos_splice_binary_splice:.4f}")
+
+            # 6. Gradient norms
+            print(f"Grad norm (expr): {grads_expr.norm().item():.4f}")
+            print(f"Grad norm (splice_binary): {grads_splice_binary.norm().item():.4f}")
+            print(f"Grad norm (splice): {grads_splice.norm().item():.4f}")
 
             loss_e += ((loss_expr.item() * weight_e) + (loss_splice_binary.item() * weight_b))
             if loss_splice is not None:
