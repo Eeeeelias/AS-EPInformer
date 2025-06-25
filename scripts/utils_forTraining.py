@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import os
 import sys
+import random
+
 import numpy as np
 import pandas as pd
 # torch
@@ -139,7 +141,7 @@ class EarlyStopping:
         self.path = path
 
     def __call__(self, val_loss, model, epoch_i):
-        score = -val_loss
+        score = -val_loss.cpu().detach().numpy()  # We want to minimize the validation loss, so we use negative score
         if self.best_score is None:
             self.best_score = score
             self.save_checkpoint(val_loss, model, epoch_i)
@@ -183,7 +185,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     if valid_dataset is not None:
         # genereate 1024 random indices for training dataset, i.e., from range(len(training_dataset))
-        train_ds = training_dataset # Subset(training_dataset, random.sample(range(len(training_dataset)), 1024))
+        train_ds = training_dataset# Subset(training_dataset, random.sample(range(len(training_dataset)), 1024))
+            #
+
         valid_ds = valid_dataset
     else:
         train_idx, val_idx = train_test_split(list(range(len(training_dataset))), test_size=valid_size,
@@ -191,10 +195,10 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         train_ds = Subset(training_dataset, train_idx)
         valid_ds = Subset(training_dataset, val_idx)
     # print quantiles of the training response and the validation response
-    print('Training expression quantiles:', np.quantile([x[4].numpy() for x in train_ds], [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99]))
-    print('Validation expression quantiles:', np.quantile([x[4].numpy() for x in valid_ds], [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99]))
-    print('Training PSI quantiles:', np.quantile([x[5].numpy() for x in train_ds], [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99]))
-    print('Validation PSI quantiles:', np.quantile([x[5].numpy() for x in valid_ds], [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99]))
+    # print('Training expression quantiles:', np.quantile([x[4].numpy() for x in train_ds], [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99]))
+    # print('Validation expression quantiles:', np.quantile([x[4].numpy() for x in valid_ds], [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99]))
+    # print('Training PSI quantiles:', np.quantile([x[5].numpy() for x in train_ds], [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99]))
+    # print('Validation PSI quantiles:', np.quantile([x[5].numpy() for x in valid_ds], [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99]))
 
 
     # fix encoder parameter
@@ -404,28 +408,28 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
 
     r2_value = r2_score(actual, preds)
     peasonr, _ = stats.pearsonr(preds, actual)
-    mse = mean_squared_error(preds, actual)
+    mse = mean_squared_error(actual, preds)
     print(f"[Val] overall loss: {loss_e / len(validloader):.5f}, "
           f"expression loss: {expression_loss / len(validloader):.5f}, " \
           f"splice loss: {splice_loss / len(validloader):.5f}")
     print("\n### Validation ### TPM expresion ###")
     # print('### Loss:', loss_expr.item()/len(validloader))#, 'Loss weighted:', loss_expr.item()/len(validloader) * loss_weights[0].item())
-    print('### Min-Max Expression:', min_max_expr)
-    print("### MSE:", mse, "R²:", r2_value, 'PeasonR:', peasonr)
+    print(f'### Min-Max Expression:{min_max_expr[0]:.5f}, {min_max_expr[1]:.5f}')
+    print(f"### MSE:{mse:.5f} R²: {r2_value:.5f} PeasonR: {peasonr:.5f}")
     # print("###"*20, "\n")
 
     try:
         r2_value_psi = r2_score(actual_psi, preds_psi)
         peasonr_psi, _ = stats.pearsonr(preds_psi, actual_psi)
-        mse_psi = mean_squared_error(preds_psi, actual_psi)
+        mse_psi = mean_squared_error(actual_psi, preds_psi)
     except ValueError:
         r2_value_psi = 0
         peasonr_psi = 0
         mse_psi = 0
     print("### Validation ### PSI expression ###")
     # print('### Loss:', splice_loss/len(validloader))#, 'Loss weighted:', loss_splice.item()/len(validloader) * loss_weights[2].item())
-    print('### Min-Max PSI:', min_max_psi)
-    print("### MSE:", mse_psi, "R²:", r2_value_psi, 'PeasonR:', peasonr_psi)
+    print(f'### Min-Max PSI: {min_max_psi[0]:.5f}, {min_max_psi[1]:.5f}')
+    print(f"### MSE:, {mse_psi:.5f} R²: {r2_value_psi:.5f} PeasonR: {peasonr_psi:.5f}")
     # print("###"*20)
 
     # get average r2 
