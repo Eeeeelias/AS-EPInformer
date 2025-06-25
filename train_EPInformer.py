@@ -123,12 +123,8 @@ else:
 
 cell = args.cell
 
-if args.cuda:
-    device = 'cuda'
-elif args.xpu:
-    device = 'xpu'
-else:
-    device = 'cpu'
+device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+
 distance_threshold = args.distance_threshold
 n_epoch = args.epochs
 hic_threshold = args.hic_threshold
