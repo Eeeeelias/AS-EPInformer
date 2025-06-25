@@ -182,7 +182,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         loss_file = open(saved_model_path + "/losses.csv", "a", encoding='utf-8')
 
     if valid_dataset is not None:
-        train_ds = training_dataset
+        train_ds = Subset(training_dataset, range(1024))
         valid_ds = valid_dataset
     else:
         train_idx, val_idx = train_test_split(list(range(len(training_dataset))), test_size=valid_size, 
@@ -198,7 +198,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
                 value.requires_grad = False
 
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
-    trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
+    trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
     early_stopping = EarlyStopping(patience=3, verbose=True,
                                    path= saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt")
 
