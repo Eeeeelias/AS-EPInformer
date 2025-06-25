@@ -185,7 +185,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         train_ds = Subset(training_dataset, range(1024))
         valid_ds = valid_dataset
     else:
-        train_idx, val_idx = train_test_split(list(range(len(training_dataset))), test_size=valid_size, 
+        train_idx, val_idx = train_test_split(list(range(len(training_dataset))), test_size=valid_size,
                                               shuffle=True, random_state=66, stratify=stratify)
         train_ds = Subset(training_dataset, train_idx)
         valid_ds = Subset(training_dataset, val_idx)
@@ -214,7 +214,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     # Loss functions
     L_expr = nn.SmoothL1Loss()
-    L_splice = hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
+    L_splice = nn.SmoothL1Loss() # hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
     learned_loss = True if loss_class is not None else False
 
     all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters())
@@ -240,7 +240,6 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         # print('model training mode is:', net.training)
         for data in tqdm(trainloader):
             # print(inputs.size())
-            optimizer.zero_grad()
             input_pe, input_seg, input_feat, input_dist, y_expr, y_psi, _ = data
             input_pe = input_pe.float().to(device)
 
@@ -253,54 +252,58 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
             pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist)
 
-            loss_expr = L_expr(pred_expr, y_expr)
+            loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
 
-            if dw is not None:
-                loss_splice_binary, loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='dense',
-                                                           dw=dw, pos_weight=pos_weight)
-            elif predict == 'multi' and dw is None:
-                loss_splice_binary, loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='l1')
-            else:
-                loss_splice = L_splice(pred_splice, y_psi)
-                loss_splice_binary = 0.0 # placeholder to keep the code structure consistent
+            # if dw is not None:
+            #     loss_splice_binary, loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='dense',
+            #                                                dw=dw, pos_weight=pos_weight)
+            # elif predict == 'multi' and dw is None:
+            #     loss_splice_binary, loss_splice = L_splice(pred_splice_binary, pred_splice, y_psi, loss_type='l1')
+            # else:
+            loss_splice = L_splice(pred_splice, y_psi.reshape(pred_splice.shape))
+            loss_splice_binary = 0.0 # placeholder to keep the code structure consistent
 
             expression_loss += loss_expr.item()
-            splice_loss += loss_splice.item() if loss_splice is not None else 0.0
+            splice_loss += loss_splice.item() #if loss_splice is not None else 0.0
 
             # adding all losses together
-            weight_e, weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(0.0, device=device), torch.tensor(0.0, device=device)
+            #weight_e, weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(0.0, device=device), torch.tensor(0.0, device=device)
 
-            if learned_loss:
-                loss, weight_e, weight_b, weight_s = loss_class(expression_loss, loss_splice_binary, splice_loss)
+            # if learned_loss:
+            #     loss, weight_e, weight_b, weight_s = loss_class(expression_loss, loss_splice_binary, splice_loss)
 
-            elif predict == 'multi':
-                weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(1.0, device=device)
-                
-                loss = (loss_expr * weight_e) + (loss_splice_binary * weight_b)
-                if loss_splice is not None:
-                    loss += (loss_splice * weight_s)
+            # elif predict == 'multi':
+            #     weight_b, weight_s = torch.tensor(1.0, device=device), torch.tensor(1.0, device=device)
+            #
+            #     loss = (loss_expr * weight_e) + (loss_splice_binary * weight_b)
+            #     if loss_splice is not None:
+            #         loss += (loss_splice * weight_s)
+            #
+            # else:
+            #     loss = loss_expr
 
-            else:
-                loss = loss_expr
-
-            loss_e += ((loss_expr.item() * weight_e) + (loss_splice_binary.item() * weight_b))
+            loss_e += loss_expr.item() #+ loss_splice_binary # ((loss_expr.item() * weight_e) + (loss_splice_binary.item() * weight_b))
             if loss_splice is not None:
-                loss_e += (loss_splice.item() * weight_s)
+                loss_e += (loss_splice.item())# * weight_s)
+
+            loss = loss_splice + loss_expr
             # propagate the loss backward
             loss.backward()
+
             # update the gradients
             optimizer.step()
-            running_loss += loss.item()
+            optimizer.zero_grad()
+            running_loss += loss_e
 
         print(f"[Epoch {epoch + 1}] loss: {running_loss/len(trainloader)}")
-        print('Training Loss:', loss_e.item()/len(trainloader))
-        print('Loss weights:', weight_e.item(), weight_b.item(), weight_s.item())
+        print('Training Loss:', loss_e/len(trainloader))
+        # print('Loss weights:', weight_e.item(), weight_b.item(), weight_s.item())
         # log_cols = ['Epoch', 'Training_Loss', 'Validation_Loss', 'Validation_PearsonR_allGene',
         #             'Validation_R2_allGene', 'Validation_PearsonR_weGene', 'Validation_R2_weGene', 'Saved?']
 
 
         val_mse_all, val_r2_all, val_pr_all = validate(net, valid_ds, n_enhancers=n_enhancers, device=device, 
-                                                       predict=predict, loss_weights=(weight_e, weight_b, weight_s))
+                                                       predict=predict)#, loss_weights=(weight_e, weight_b, weight_s))
         val_r2 = val_r2_all
         val_pr_we, val_r2_we = val_pr_all, val_r2_all
         print('Valdaition R square all:', val_r2_all)
@@ -323,7 +326,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     validloader = data_utils.DataLoader(valid_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     net.eval()
     L_expr = nn.SmoothL1Loss()
-    L_psi = hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
+    L_psi = nn.SmoothL1Loss() # hurdle_loss if predict == 'multi' else nn.SmoothL1Loss()
 
     with torch.no_grad():
         preds = []
@@ -358,19 +361,20 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
                 outputs_psi = list(pred_splice.flatten().cpu().detach().numpy())
                 labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
-            loss_expr = L_expr(pred_expr, y_expr)
+            loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
             # loss_expr = anti_bias_loss(loss_expr, pred_expr, alpha=0.3) # anti-bias loss
-            if predict == 'multi':
-                loss_splice_binary, loss_splice = L_psi(pred_splice_binary, pred_splice, y_psi, loss_type='mse')
-                loss_e += ((loss_expr.item() * loss_weights[0]) + (loss_splice_binary.item() * loss_weights[1]))
-                if loss_splice is not None:
-                    loss_e += (loss_splice.item() * loss_weights[2])
-                else:
-                    # placeholder to keep the code structure consistent, won't be used in the loss calculation
-                    loss_splice = 0.0
-            else:
-                loss_splice = L_psi(pred_splice, y_psi)
-                loss_e += loss_expr.item()
+            # if predict == 'multi':
+            #     loss_splice_binary, loss_splice = L_psi(pred_splice_binary, pred_splice, y_psi, loss_type='mse')
+            #     loss_e += ((loss_expr.item() * loss_weights[0]) + (loss_splice_binary.item() * loss_weights[1]))
+            #     if loss_splice is not None:
+            #         loss_e += (loss_splice.item() * loss_weights[2])
+            #     else:
+            #         # placeholder to keep the code structure consistent, won't be used in the loss calculation
+            #         loss_splice = 0.0
+            # else:
+            loss_splice = L_psi(pred_splice, y_psi.reshape(pred_splice.shape))
+                # loss_e += loss_expr.item()
+            loss_e += loss_expr + loss_splice
 
             preds += outputs
             actual += labels
@@ -387,7 +391,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     peasonr, _ = stats.pearsonr(preds, actual)
     mse = mean_squared_error(preds, actual)
     print("\n### Validation ### TPM expresion ###")
-    print('### Loss:', loss_expr.item()/len(validloader), 'Loss weighted:', loss_expr.item()/len(validloader) * loss_weights[0].item())
+    print('### Loss:', loss_expr.item()/len(validloader))#, 'Loss weighted:', loss_expr.item()/len(validloader) * loss_weights[0].item())
     print('### Min-Max Expression:', min_max_expr)
     print("### MSE:", mse, "R²:", r2_value, 'PeasonR:', peasonr)
     print("###"*20, "\n")
@@ -401,7 +405,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         peasonr_psi = 0
         mse_psi = 0
     print("\n### Validation ### PSI expression ###")
-    print('### Loss:', loss_splice.item()/len(validloader), 'Loss weighted:', loss_splice.item()/len(validloader) * loss_weights[2].item())
+    print('### Loss:', loss_splice.item()/len(validloader))#, 'Loss weighted:', loss_splice.item()/len(validloader) * loss_weights[2].item())
     print('### Min-Max PSI:', min_max_psi)
     print("### MSE:", mse_psi, "R²:", r2_value_psi, 'PeasonR:', peasonr_psi)
     print("###"*20)
