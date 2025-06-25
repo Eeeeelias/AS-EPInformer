@@ -256,17 +256,16 @@ class EPInformer_v2(nn.Module):
         self.pToSpliceBinary = nn.Sequential(
             nn.Linear(self.out_dim+feat_n, 128),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(128, 1),
             nn.ReLU(),
-            nn.Linear(64, 1),
         )
 
         self.pToSplice = nn.Sequential(
             nn.Linear(self.out_dim+feat_n, 128),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(64, 1),
+            nn.Linear(128, 1),
             # nn.Sigmoid()  
         )
         self.add_pos_conv = nn.Sequential(
@@ -351,13 +350,15 @@ class WeightedLoss(nn.Module):
         self.log_weight_splice_reg = nn.Parameter(torch.tensor(1.0), requires_grad=True)
 
     def forward(self, loss_expr, loss_splice_binary, loss_splice_regression):
-        weight_expr = torch.exp(self.log_weight_expr)
-        weight_splice_binary = torch.exp(self.log_weight_splice_binary)
-        weight_splice_regression = torch.exp(self.log_weight_splice_reg)
+        weight_expr = torch.exp(-self.log_weight_expr)
+        weight_splice_binary = torch.exp(-self.log_weight_splice_binary)
+        weight_splice_regression = torch.exp(-self.log_weight_splice_reg)
 
-        weighted_loss = (weight_expr * loss_expr + 
-                         weight_splice_binary * loss_splice_binary + 
-                         weight_splice_regression * loss_splice_regression)
+        weighted_loss = (
+            torch.exp(-self.log_weight_expr) * loss_expr + self.log_weight_expr +
+            torch.exp(-self.log_weight_splice_binary) * loss_splice_binary + self.log_weight_splice_binary +
+            torch.exp(-self.log_weight_splice_reg) * loss_splice_regression + self.log_weight_splice_reg
+        )
         
         return weighted_loss, weight_expr, weight_splice_binary, weight_splice_regression
     
