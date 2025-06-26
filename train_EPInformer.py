@@ -21,7 +21,7 @@ parser.add_argument("--model_type", type=str, help='EPInformer type', default='E
                     choices=['EPInformer-PE', 'EPInformer-PE-Activity', 'EPInformer-PE-Activity-HiC'])  
 parser.add_argument('--distance_threshold', type=int, help='max distance to TSS', default=100_000) 
 parser.add_argument('--hic_threshold', type=int, help='hic loop thresold', default=-1) 
-parser.add_argument('--expr_assay', type=str, help='expression_assay', choices=['CAGE', 'RNA', 'multi', 'transcript'])
+parser.add_argument('--expr_assay', type=str, help='expression_assay', choices=['CAGE', 'RNA', 'multi', 'splice'])
 parser.add_argument('--batch_size', type=int, help='batch size', default=16)
 parser.add_argument('--n_interact_enc',type=int, help='layers of interaction encoder', default=3)
 parser.add_argument('--epochs',type=int, help='training epochs', default=100)
@@ -37,6 +37,8 @@ parser.add_argument('--event_genes', action='store_true', help='Use only genes t
 parser.add_argument('--learn_loss_weights', action='store_true', help='Learn loss weights for the splicing and expression tasks')
 parser.add_argument('--weigh_samples', action='store_true', help='Weigh samples based on their frequency in the training set')
 parser.add_argument('--short_run', action='store_true', help='Run a short version for testing purposes')
+parser.add_argument('--expr_loss', type=str, default='mse', choices=['mse', 'smoothl1'], help='Loss function for expression task')
+parser.add_argument('--splice_loss', type=str, default='bce', choices=['bce', 'smoothl1'], help='Loss function for splicing task')
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -122,7 +124,7 @@ def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float
 args = parser.parse_args()
 
 #### import the right EPinformer model
-if args.expr_assay == 'multi' or args.expr_assay == 'transcript' or args.include_exons:
+if args.expr_assay == 'multi' or args.expr_assay == 'splice' or args.include_exons:
     from EPInformer.models_multi import EPInformer_v2, enhancer_predictor_256bp, WeightedLoss
 else:
     from EPInformer.models import EPInformer_v2, enhancer_predictor_256bp, WeightedLoss
