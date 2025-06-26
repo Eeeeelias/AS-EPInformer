@@ -107,6 +107,7 @@ class MHAttention_encoderLayer(nn.Module):
         x = x + self.ff(x2)
         return x, attention_w
 
+
 class MHAttention_encoderLayer_noLN(nn.Module):
     def __init__(self, d_model=2048, nhead=8, dim_feedforward=256, dropout=0.1, activation=F.relu):
         super(MHAttention_encoderLayer_noLN, self).__init__()
@@ -138,7 +139,8 @@ class MHAttention_encoderLayer_noLN(nn.Module):
 
 class EPInformer_v2(nn.Module):
     def __init__(self, base_size = 4, n_encoder=3, out_dim=128, head = 4, pre_trained_encoder= None, n_enhancer=50, 
-                 device='cuda', useBN=True, usePromoterSignal=True, useFeat=True, n_extraFeat=0, useLN=True, exon_data=False):
+                 device='cuda', useBN=True, usePromoterSignal=True, useFeat=True, n_extraFeat=0, useLN=True, exon_data=False,
+                 separate_attention=False):
         super(EPInformer_v2, self).__init__()
         self.n_enhancer = n_enhancer
         self.out_dim = out_dim
@@ -151,6 +153,7 @@ class EPInformer_v2(nn.Module):
         self.n_encoder = n_encoder
         self.device = device
         self.use_exon_data = exon_data
+        self.separate_attention = separate_attention
 
         # 1. pre-trained sequence encoder
         if pre_trained_encoder is not None:
@@ -160,7 +163,8 @@ class EPInformer_v2(nn.Module):
         else:
             self.seq_encoder = seq_256bp_encoder(base_size=base_size)
             self.name = f'EPInformerV2.{base_size}base.{out_dim}dim.{n_encoder}Trans.{head}head.{useBN}BN.{useLN}LN.' \
-                        f'{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh.{exon_data}exon'
+                        f'{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh.{exon_data}exon.' \
+                        f'{separate_attention}exonAttn'
         
         if self.use_exon_data:
             self.segment_encoder = seq_256bp_encoder(base_size=base_size)
@@ -170,15 +174,13 @@ class EPInformer_v2(nn.Module):
         else:
             self.attn_encoder = get_clones(MHAttention_encoderLayer_noLN(d_model=out_dim, nhead=head), self.n_encoder)
        
-        attn_mask_additional_dim = 4 if self.use_exon_data else 1
+        # get attention masks for promoter and exon data
+        self.attn_mask = self.promoter_attention_mask(additional_dim= 4 if self.use_exon_data else 1)
+        if self.separate_attention:
+            self.exon_attn_mask = self.exon_attention_mask(additional_dim=4, n_attend_last=3)
+        else:
+            self.exon_attn_mask = self.attn_mask
 
-        attn_mask = (~np.identity(self.n_enhancer+attn_mask_additional_dim).astype(bool))
-        attn_mask[:, 0] = False
-        attn_mask[0, :] = False
-        attn_mask = torch.from_numpy(attn_mask)
-        attn_mask.masked_fill(attn_mask, float('-inf'))
-        self.attn_mask = attn_mask
-        
         if self.useBN: # use batch norm
             self.conv_out = nn.Sequential(
                 nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
@@ -282,17 +284,40 @@ class EPInformer_v2(nn.Module):
         """
         return list(self.attn_encoder.parameters()) + list(self.add_pos_conv.parameters())
 
+    def promoter_attention_mask(self, additional_dim=1):
+        # creates attention mask that allows only the first token to attend and be attended to (so promoter sequence)
+        attn_mask_additional_dim = additional_dim
+        attn_mask = (~np.identity(self.n_enhancer+attn_mask_additional_dim).astype(bool))
+        attn_mask[:, 0] = False
+        attn_mask[0, :] = False
+        attn_mask = torch.from_numpy(attn_mask)
+        attn_mask.masked_fill(attn_mask, float('-inf'))
+        return attn_mask
+
+    def exon_attention_mask(self, additional_dim=4, n_attend_last=3):
+        # attend to the last three tokens (intron, exon, intron segment) and nothing else
+        assert additional_dim >= 4, "additional_dim must be at least 4 for exon attention mask"
+
+        attn_mask = (~np.identity(self.n_enhancer+additional_dim).astype(bool))
+        attn_mask[:, -n_attend_last:] = False
+        attn_mask[-n_attend_last:, :] = False
+        attn_mask = torch.from_numpy(attn_mask)
+        attn_mask.masked_fill(attn_mask, float('-inf'))
+        return attn_mask
+
+
     def forward(self, pe_seq, exon_seq, rna_feat=None, extraFeat=None):
         # if enhancers_padding_mask is None:
         enhancers_padding_mask = ~(pe_seq.sum(-1).sum(-1) > 0).bool()
+        enhancers_padding_mask[:, 0] = False # keep this only for ablation study where pe_seq is zeroed out
         if self.use_exon_data:
             exon_padding_mask = ~(exon_seq.sum(-1).sum(-1) > 0).bool() # added padding mask for segments and combined
             enhancers_padding_mask = torch.concat([enhancers_padding_mask, exon_padding_mask], dim=1)
-        
+    
+
         pe_embed = self.seq_encoder(pe_seq)
         pe_embed = self.conv_out(pe_embed)
         pe_flatten_embed = torch.flatten(pe_embed.permute(0, 2, 1, 3), start_dim=2)
-
 
         if self.use_exon_data:
             exon_embed = self.segment_encoder(exon_seq)
@@ -304,7 +329,8 @@ class EPInformer_v2(nn.Module):
             # fill extraFeat with zeros on dim 1
             if self.use_exon_data:
                 extraFeat = F.pad(extraFeat, pad=(0,0,0,3))
-            pe_flatten_embed = self.add_pos_conv(torch.concat([pe_flatten_embed, extraFeat], axis=-1).permute(0,2,1)).permute(0,2,1) # type: ignore
+            pe_flatten_embed = self.add_pos_conv(torch.concat([pe_flatten_embed, extraFeat], axis=-1)
+                                                 .permute(0,2,1)).permute(0,2,1)
         attn_list = []
 
         # split self.n_encode in half (e.g. if n_encoder=6 then first 3 layers are for enhancers and last 3 layers for segments)
@@ -323,8 +349,8 @@ class EPInformer_v2(nn.Module):
         p_embed_splice = torch.flatten(pe_flatten_embed_splice[:,0,:], start_dim=1)
 
         if self.useFeat:
-            p_embed_expr = torch.cat([p_embed_expr, rna_feat], dim=-1) # type: ignore
-            p_embed_splice = torch.cat([p_embed_splice, rna_feat], dim=-1) # type: ignore
+            p_embed_expr = torch.cat([p_embed_expr, rna_feat], dim=-1) 
+            p_embed_splice = torch.cat([p_embed_splice, rna_feat], dim=-1) 
 
         p_expr = self.pToExpr(p_embed_expr)
 

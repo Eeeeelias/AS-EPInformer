@@ -370,9 +370,14 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     min_max_expr = [np.min(preds), np.max(preds)]
     min_max_psi = [np.min(preds_psi), np.max(preds_psi)]
 
-    r2_value = r2_score(actual, preds)
-    peasonr, _ = stats.pearsonr(preds, actual)
-    mse = mean_squared_error(actual, preds)
+    try:
+        r2_value = r2_score(actual, preds)
+        peasonr, _ = stats.pearsonr(preds, actual)
+        mse = mean_squared_error(actual, preds)
+    except ValueError:
+        r2_value = 0
+        peasonr = 0
+        mse = 0
     print(f"[Val] overall loss: {loss_e / len(validloader):.5f}, "
           f"expression loss: {expression_loss / len(validloader):.5f}, " \
           f"splice loss: {splice_loss / len(validloader):.5f}")

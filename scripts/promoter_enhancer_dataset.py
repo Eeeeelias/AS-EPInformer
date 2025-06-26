@@ -16,7 +16,8 @@ import h5py
 class promoter_enhancer_dataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
-                 rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False):
+                 rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False,
+                 set_exon_zero=False, set_pe_zero=False):
         self.expr_type = expr_type
         self.cell_type = cell_type
         self.data_folder = data_folder
@@ -30,8 +31,10 @@ class promoter_enhancer_dataset(Dataset):
         self.rna_seq_source = rna_seq_source
         self.filter_for_event_genes = event_genes
         self.include_exons = include_exons
+        self.zero_out_exons = set_exon_zero
+        self.zero_out_pe_data = set_pe_zero
         
-        if not self.include_exons and (self.expr_type == 'multi' or self.expr_type == 'transcript'):
+        if not self.include_exons and (self.expr_type == 'multi' or self.expr_type == 'splice'):
             print("INFO: Exons will be included automatically for multi or transcript expression types.")
             self.include_exons = True
 
@@ -61,7 +64,7 @@ class promoter_enhancer_dataset(Dataset):
         self.present_genes = self.expr_df.index
         self.valid_events = self.get_valid_genes()
         self.idx_map = None # map various indices to gene ids
-        if single_event_train and (self.expr_type == 'multi' or self.expr_type == 'transcript'):
+        if single_event_train and (self.expr_type == 'multi' or self.expr_type == 'splice'):
             self.idx_map, self.event_keys = self.map_idx_single_genes()
 
         if self.rna_seq_source == 'epiatlas':
@@ -95,7 +98,7 @@ class promoter_enhancer_dataset(Dataset):
             # find idx where gene_id is in the data_h5
             idx = np.where(self.data_h5['ensid'][:] == gene_id.encode())[0][0]
 
-        if self.filter_for_event_genes and self.expr_type != 'multi' and self.expr_type != 'transcript':
+        if self.filter_for_event_genes and self.expr_type != 'multi' and self.expr_type != 'splice':
             idx = self.idx_map[idx]
 
         sample_ensid = self.data_h5['ensid'][idx].decode()
@@ -127,6 +130,9 @@ class promoter_enhancer_dataset(Dataset):
             vocab = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
             segment_tensor = torch.stack([self.one_hot_encode(upstream, vocab), self.one_hot_encode(exon, vocab), 
                                         self.one_hot_encode(downstream, vocab)])
+            
+            if self.zero_out_exons:
+                segment_tensor = torch.zeros_like(segment_tensor)
         
         if self.signal_type == 'H3K27ac':
             promoter_activity = self.promoter_df.loc[sample_ensid]['PromoterActivity']
@@ -185,6 +191,10 @@ class promoter_enhancer_dataset(Dataset):
             enhancers_code = np.zeros_like(enhancers_code[:self.n_enhancers, :])
         enhancers_code_tensor = torch.from_numpy(enhancers_code[:self.n_enhancers, :]).float()
         pe_code_tensor = torch.concat([promoter_code_tensor, enhancers_code_tensor])
+        # zero out promoter/enhancer data for ablation study
+        if self.zero_out_pe_data:
+            pe_code_tensor = torch.zeros_like(pe_code_tensor)
+
         rnaFeat_tensor = torch.from_numpy(rnaFeat).float()
         # print(pe_distance_tensor)
         psi_tensor = 0
@@ -200,12 +210,7 @@ class promoter_enhancer_dataset(Dataset):
             rna_expr = self.epiatlas_expr_df.loc[sample_ensid][self.cell_type]
             expr_tensor = torch.from_numpy(np.array([rna_expr])).float()
             
-        elif self.expr_type == 'multi':
-            event_expr = self.psi_response.loc[event]
-            expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}{self.tpm_level}{normal}'])).float()
-            psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi{normal}'])).float()
-        
-        elif self.expr_type == 'transcript':
+        elif self.expr_type == 'multi' or self.expr_type == 'splice':
             event_expr = self.psi_response.loc[event]
             expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}{self.tpm_level}{normal}'])).float()
             psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi{normal}'])).float()
