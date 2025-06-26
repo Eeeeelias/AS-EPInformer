@@ -41,6 +41,8 @@ parser.add_argument('--expr_loss', type=str, default='mse', choices=['mse', 'smo
 parser.add_argument('--splice_loss', type=str, default='bce', choices=['bce', 'smoothl1'], help='Loss function for splicing task')
 parser.add_argument('--set_exon_zero', action='store_true', help='Set exon data to zero for testing purposes')
 parser.add_argument('--set_pe_zero', action='store_true', help='Set promoter/enhancer data to zero for testing purposes')
+parser.add_argument('--set_rna_zero', action='store_true', help='Set RNA half life data to zero for testing purposes')
+parser.add_argument('--set_extra_feat_zero', action='store_true', help='Set extra features (HiC, Activity, Distance) to zero for testing purposes')
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -160,7 +162,7 @@ fold_list = args.fold
 n_encoder = args.n_interact_enc
 batch_size = args.batch_size 
 expr_type = args.expr_assay
-n_enhancers = 60
+n_enhancers = 0
 #################
 
 today = datetime.now()   # Get date
@@ -187,7 +189,8 @@ for fi in fold_list:
                                                   distance_threshold=distance_threshold, include_exons=args.include_exons,
                                                   rna_seq_source=args.rna_seq_source, tpm=args.tpm_level,
                                                   single_event_train=args.single_events, event_genes=args.event_genes,
-                                                  set_exon_zero=args.set_exon_zero, set_pe_zero=args.set_pe_zero)
+                                                  set_exon_zero=args.set_exon_zero, set_pe_zero=args.set_pe_zero,
+                                                  set_rna_zero=args.set_rna_zero, set_extra_feat_zero=args.set_extra_feat_zero)
     # create train, valid, test indices
     #train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1, 
     #                                                    events=True, seed=42+int(fi))
@@ -215,11 +218,11 @@ for fi in fold_list:
         print('Loading pretrained model ...', pt_model_name)
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=pretrained_convNet.encoder,
                               n_enhancer=n_enhancers, out_dim=64, n_extraFeat=n_extraFeat, device=device, 
-                              exon_data=args.include_exons, separate_attention=True).to(device)
+                              exon_data=args.include_exons, separate_attention=False).to(device)
     else:
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=None, n_enhancer=n_enhancers, 
                               out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=args.include_exons, 
-                              separate_attention=True).to(device)
+                              separate_attention=False).to(device)
 
     if args.learn_loss_weights:
         print("Learning loss weights for the splicing and expression tasks.")

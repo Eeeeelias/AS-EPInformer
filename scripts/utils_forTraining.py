@@ -378,7 +378,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         r2_value = 0
         peasonr = 0
         mse = 0
-    print(f"[Val] overall loss: {loss_e / len(validloader):.5f}, "
+    print(f"[Validat] overall loss: {loss_e / len(validloader):.5f}, "
           f"expression loss: {expression_loss / len(validloader):.5f}, " \
           f"splice loss: {splice_loss / len(validloader):.5f}")
     print("\n### Validation ### TPM expresion ###")

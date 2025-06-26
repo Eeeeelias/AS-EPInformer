@@ -17,7 +17,7 @@ class promoter_enhancer_dataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
                  rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False,
-                 set_exon_zero=False, set_pe_zero=False):
+                 set_exon_zero=False, set_pe_zero=False, set_rna_zero=False, set_extra_feat_zero=False):
         self.expr_type = expr_type
         self.cell_type = cell_type
         self.data_folder = data_folder
@@ -31,8 +31,11 @@ class promoter_enhancer_dataset(Dataset):
         self.rna_seq_source = rna_seq_source
         self.filter_for_event_genes = event_genes
         self.include_exons = include_exons
+        # ablation test params
         self.zero_out_exons = set_exon_zero
         self.zero_out_pe_data = set_pe_zero
+        self.zero_out_rna_data = set_rna_zero
+        self.zero_out_feat_data = set_extra_feat_zero
         
         if not self.include_exons and (self.expr_type == 'multi' or self.expr_type == 'splice'):
             print("INFO: Exons will be included automatically for multi or transcript expression types.")
@@ -130,9 +133,6 @@ class promoter_enhancer_dataset(Dataset):
             vocab = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
             segment_tensor = torch.stack([self.one_hot_encode(upstream, vocab), self.one_hot_encode(exon, vocab), 
                                         self.one_hot_encode(downstream, vocab)])
-            
-            if self.zero_out_exons:
-                segment_tensor = torch.zeros_like(segment_tensor)
         
         if self.signal_type == 'H3K27ac':
             promoter_activity = self.promoter_df.loc[sample_ensid]['PromoterActivity']
@@ -191,11 +191,18 @@ class promoter_enhancer_dataset(Dataset):
             enhancers_code = np.zeros_like(enhancers_code[:self.n_enhancers, :])
         enhancers_code_tensor = torch.from_numpy(enhancers_code[:self.n_enhancers, :]).float()
         pe_code_tensor = torch.concat([promoter_code_tensor, enhancers_code_tensor])
+        rnaFeat_tensor = torch.from_numpy(rnaFeat).float()
+
         # zero out promoter/enhancer data for ablation study
         if self.zero_out_pe_data:
             pe_code_tensor = torch.zeros_like(pe_code_tensor)
+        if self.zero_out_rna_data:
+            rnaFeat_tensor = torch.zeros_like(rnaFeat_tensor)
+        if self.zero_out_feat_data:
+            pe_feat_tensor = torch.zeros_like(pe_feat_tensor)
+        if self.zero_out_exons:
+            segment_tensor = torch.zeros_like(segment_tensor)
 
-        rnaFeat_tensor = torch.from_numpy(rnaFeat).float()
         # print(pe_distance_tensor)
         psi_tensor = 0
         normal = "_normal" if self.use_normalized_psi else ""
