@@ -17,7 +17,7 @@ class promoter_enhancer_dataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
                  rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False,
-                 set_exon_zero=False, set_pe_zero=False, set_rna_zero=False, set_extra_feat_zero=False):
+                 set_exon_zero=False, set_pe_zero=False, set_rna_zero=False, set_extra_feat_zero=False, set_promoter_zero=False):
         self.expr_type = expr_type
         self.cell_type = cell_type
         self.data_folder = data_folder
@@ -36,6 +36,7 @@ class promoter_enhancer_dataset(Dataset):
         self.zero_out_pe_data = set_pe_zero
         self.zero_out_rna_data = set_rna_zero
         self.zero_out_feat_data = set_extra_feat_zero
+        self.zero_out_promoter = set_promoter_zero
         
         if not self.include_exons and (self.expr_type == 'multi' or self.expr_type == 'splice'):
             print("INFO: Exons will be included automatically for multi or transcript expression types.")
@@ -186,6 +187,10 @@ class promoter_enhancer_dataset(Dataset):
             pe_feat = np.concatenate([pe_distance[:,np.newaxis]],axis=-1)
 
         promoter_code_tensor = torch.from_numpy(promoter_code).float()
+        # zero out promoter code if set_promoter_zero is True
+        if self.zero_out_promoter:
+            promoter_code_tensor = torch.zeros_like(promoter_code_tensor)
+
         pe_feat_tensor = torch.from_numpy(pe_feat[:self.n_enhancers+1])
         if self.n_extraFeat == 0: # Use promoter only
             enhancers_code = np.zeros_like(enhancers_code[:self.n_enhancers, :])

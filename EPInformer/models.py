@@ -142,7 +142,8 @@ class MHAttention_encoderLayer_noLN(nn.Module):
 
 class EPInformer_v2(nn.Module):
     def __init__(self, base_size = 4, n_encoder=3, out_dim=128, head = 4, pre_trained_encoder= None, n_enhancer=50, 
-                 device='cuda', useBN=True, usePromoterSignal=True, useFeat=True, n_extraFeat=0, useLN=True, exon_data=False):
+                 device='cuda', useBN=True, usePromoterSignal=True, useFeat=True, n_extraFeat=0, useLN=True, 
+                 exon_data=False, separate_attention=False):
         super(EPInformer_v2, self).__init__()
         self.n_enhancer = n_enhancer
         self.out_dim = out_dim
@@ -251,7 +252,8 @@ class EPInformer_v2(nn.Module):
         if self.useFeat:
             p_embed = torch.cat([p_embed, rna_feat], dim=-1) # type: ignore
         p_expr = self.pToExpr(p_embed)
-        return p_expr, torch.tensor([1]).to(self.device), torch.tensor([1]).to(self.device), torch.cat(attn_list)
+        dummy_p_splice = torch.zeros_like(p_expr).to(self.device)
+        return p_expr, dummy_p_splice, dummy_p_splice, torch.cat(attn_list)
 
 
 class WeightedLoss(nn.Module):

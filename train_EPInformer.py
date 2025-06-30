@@ -36,13 +36,15 @@ parser.add_argument('--z_score_normalise', help='Apply z-score normalization to 
 parser.add_argument('--event_genes', action='store_true', help='Use only genes that also have events in the training set')
 parser.add_argument('--learn_loss_weights', action='store_true', help='Learn loss weights for the splicing and expression tasks')
 parser.add_argument('--weigh_samples', action='store_true', help='Weigh samples based on their frequency in the training set')
-parser.add_argument('--short_run', action='store_true', help='Run a short version for testing purposes')
 parser.add_argument('--expr_loss', type=str, default='mse', choices=['mse', 'smoothl1'], help='Loss function for expression task')
 parser.add_argument('--splice_loss', type=str, default='bce', choices=['bce', 'smoothl1'], help='Loss function for splicing task')
+# ablation/debug arguments
+parser.add_argument('--short_run', action='store_true', help='Run a short version for testing purposes')
 parser.add_argument('--set_exon_zero', action='store_true', help='Set exon data to zero for testing purposes')
 parser.add_argument('--set_pe_zero', action='store_true', help='Set promoter/enhancer data to zero for testing purposes')
 parser.add_argument('--set_rna_zero', action='store_true', help='Set RNA half life data to zero for testing purposes')
 parser.add_argument('--set_extra_feat_zero', action='store_true', help='Set extra features (HiC, Activity, Distance) to zero for testing purposes')
+parser.add_argument('--set_promoter_zero', action='store_true', help='Set promoter data to zero for testing purposes')
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -54,20 +56,37 @@ def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     
     return filtered_train_ids, filtered_valid_ids, filtered_test_ids
 
-def create_set_indices(all_ids, train_ratio=0.8, valid_ratio=0.1, events=False, seed=0):
+def create_set_indices(all_ids, train_ratio=0.8, valid_ratio=0.1, events=False, seed=0, splits=None, fold_i='fold_1'):
     """
     Create train, valid, test indices based on the given ratios
     """
     np.random.seed(seed)
-    np.random.shuffle(all_ids)
+    if splits is None:
+        all_ids = np.arange(len(all_ids))
+        np.random.shuffle(all_ids)
     
     n_total = len(all_ids)
     n_train = int(n_total * train_ratio)
     n_valid = int(n_total * valid_ratio)
     
-    train_ids = all_ids[:n_train]
-    valid_ids = all_ids[n_train:n_train + n_valid]
-    test_ids = all_ids[n_train + n_valid:]
+    if splits is not None:
+        print("Using predefined splits")
+        ensid_list = [eid.decode() for eid in all_ids.data_h5['ensid'][:]]
+        ensid_df = pd.DataFrame(ensid_list, columns=['ensid'])
+        ensid_df['idx'] = np.arange(len(ensid_list))
+        ensid_df = ensid_df.set_index('ensid')
+
+        train_ensid = splits[splits[fold_i] == 'train'].index
+        valid_ensid = splits[splits[fold_i] == 'valid'].index
+        test_ensid = splits[splits[fold_i] == 'test'].index
+
+        train_ids = ensid_df.loc[train_ensid]['idx']
+        valid_ids = ensid_df.loc[valid_ensid]['idx']
+        test_ids = ensid_df.loc[test_ensid]['idx']
+    else:
+        train_ids = all_ids[:n_train]
+        valid_ids = all_ids[n_train:n_train + n_valid]
+        test_ids = all_ids[n_train + n_valid:]
     
     return train_ids, valid_ids, test_ids
 
@@ -162,14 +181,17 @@ fold_list = args.fold
 n_encoder = args.n_interact_enc
 batch_size = args.batch_size 
 expr_type = args.expr_assay
-n_enhancers = 0
+n_enhancers = 60
 #################
 
 today = datetime.now()   # Get date
 
-datetime_str = today.strftime("%Y-%m-%d-%H")
+datetime_str = today.strftime("%Y-%m-%d-%H-%M")
 split_df = pd.read_csv('./data/leave_chrom_out_crossvalidation_split_18377genes.csv', index_col=0)
-saved_model_path = f'./trained_models/{datetime_str}/'
+if args.short_run:
+    saved_model_path = None
+else:
+    saved_model_path = f'./trained_models/{datetime_str}/'
 
 if 'all' in fold_list:
     fold_list = list(range(1, 13))
@@ -190,7 +212,8 @@ for fi in fold_list:
                                                   rna_seq_source=args.rna_seq_source, tpm=args.tpm_level,
                                                   single_event_train=args.single_events, event_genes=args.event_genes,
                                                   set_exon_zero=args.set_exon_zero, set_pe_zero=args.set_pe_zero,
-                                                  set_rna_zero=args.set_rna_zero, set_extra_feat_zero=args.set_extra_feat_zero)
+                                                  set_rna_zero=args.set_rna_zero, set_extra_feat_zero=args.set_extra_feat_zero,
+                                                  set_promoter_zero=args.set_promoter_zero)
     # create train, valid, test indices
     #train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1, 
     #                                                    events=True, seed=42+int(fi))
@@ -198,8 +221,8 @@ for fi in fold_list:
         train_idx, valid_idx, test_idx = split_multitask_ids(all_ds.event_keys, train_frac=0.8, val_frac=0.1, 
                                                              test_frac=0.1, seed=42+int(fi), short_run=args.short_run)
     else:
-        train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1,
-                                                            events=True, seed=42+int(fi))
+        train_idx, valid_idx, test_idx = create_set_indices(all_ds, train_ratio=0.8, valid_ratio=0.1,
+                                                            events=False, seed=42+int(fi), splits=split_df, fold_i=fold_i)
     
     normals = None
     if args.z_score_normalise:
@@ -218,11 +241,11 @@ for fi in fold_list:
         print('Loading pretrained model ...', pt_model_name)
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=pretrained_convNet.encoder,
                               n_enhancer=n_enhancers, out_dim=64, n_extraFeat=n_extraFeat, device=device, 
-                              exon_data=args.include_exons, separate_attention=False).to(device)
+                              exon_data=args.include_exons, separate_attention=True).to(device)
     else:
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=None, n_enhancer=n_enhancers, 
                               out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=args.include_exons, 
-                              separate_attention=False).to(device)
+                              separate_attention=True).to(device)
 
     if args.learn_loss_weights:
         print("Learning loss weights for the splicing and expression tasks.")

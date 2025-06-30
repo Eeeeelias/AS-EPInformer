@@ -19,7 +19,7 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 # logging
 # from model.EPInformer import EPInformer_v2, enhancer_predictor_256bp
-from scripts.loss_functions import hurdle_loss
+from scripts.loss_functions import dense_loss
 
 def get_lr(optimizer):
     for param_group in optimizer.param_groups:
@@ -57,7 +57,7 @@ def get_sample_weights(trainloader, device='cpu'):
     return dw, pos_weight
 
 
-def get_loss_function(expr_loss_type='mse', splice_loss_type='bce'):
+def get_loss_function(expr_loss_type='mse', splice_loss_type='bce', **kwargs):
     """Get the loss function based on the specified type."""
     if expr_loss_type == 'mse':
         L_expr = nn.MSELoss()
@@ -67,9 +67,9 @@ def get_loss_function(expr_loss_type='mse', splice_loss_type='bce'):
         raise ValueError(f"Unsupported expression loss type: {expr_loss_type}")
 
     if splice_loss_type == 'bce':
-        L_splice = nn.BCEWithLogitsLoss()
+        L_splice = nn.BCEWithLogitsLoss(**kwargs)
     elif splice_loss_type == 'smoothl1':
-        L_splice = nn.SmoothL1Loss()
+        L_splice = nn.SmoothL1Loss(**kwargs)
     else:
         raise ValueError(f"Unsupported splice loss type: {splice_loss_type}")
     return L_expr, L_splice
@@ -152,7 +152,7 @@ class Logger():
 
 class EarlyStopping:
     """Early stops the training if validation loss doesn't improve after a given patience."""
-    def __init__(self, patience=3, verbose=False, delta=0, path='checkpoint.pt'):
+    def __init__(self, patience=3, verbose=False, delta=0, path=None):
         """
         Args:
             patience (int): How long to wait after last time validation loss improved.
@@ -193,13 +193,14 @@ class EarlyStopping:
         if self.verbose:
             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
 
-        torch.save({
-                'epoch': epoch_i,
-                'model_state_dict': model.state_dict(),
-                'loss': val_loss,
-                },
-                self.path)
-        print('Saving ckpt at', self.path)
+        if self.path is not None:
+            torch.save({
+                        'epoch': epoch_i,
+                        'model_state_dict': model.state_dict(),
+                        'loss': val_loss,
+                        },
+                        self.path)
+            print('Saving ckpt at', self.path)
         # torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
 
@@ -208,12 +209,12 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
           fixed_encoder = False, n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, 
           device = 'cuda', stratify=None, epochs=100, valid_size=1000, predict='multi', loss_class=None, 
           weigh_samples=False, expr_loss_type='mse', splice_loss_type='bce'):
-    if not os.path.exists(saved_model_path):
+    if saved_model_path and not os.path.exists(saved_model_path):
         os.mkdir(saved_model_path)
-    if not os.path.exists(saved_model_path + "/losses.csv"):
+    if saved_model_path and not os.path.exists(saved_model_path + "/losses.csv"):
         loss_file = open(saved_model_path + "/losses.csv", "w", encoding='utf-8')
         loss_file.write("fold,epoch,training_loss,expresssion_loss,splice_loss,validation_mse,validation_r2\n")
-    else:
+    elif saved_model_path:
         loss_file = open(saved_model_path + "/losses.csv", "a", encoding='utf-8')
 
     train_ds = training_dataset
@@ -228,8 +229,11 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
-    early_stopping = EarlyStopping(patience=3, path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
-                                   verbose=True)
+    if saved_model_path is not None:
+        early_stopping = EarlyStopping(patience=3, path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
+                                    verbose=True)
+    else:
+        early_stopping = EarlyStopping(patience=3, verbose=True)
     
     
     # get all PSI values from training dataset
@@ -242,7 +246,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         pos_weight = None
 
     # Loss functions
-    L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type)
+    L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type, reduction='none')
     learned_loss = True if loss_class is not None else False
 
     all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters())
@@ -283,6 +287,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
             loss_splice = L_splice(pred_splice, y_psi.reshape(pred_splice.shape))
 
+            if weigh_samples:
+                loss_splice = dense_loss(pred_splice, y_psi.reshape(pred_splice.shape), dw, loss_fn=L_splice)
+
             expression_loss += loss_expr.item()
             splice_loss += loss_splice.item()
 
@@ -304,10 +311,11 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         val_pr_we, val_r2_we = val_pr_all, val_r2_all
         print('Validation R square all:', val_r2_all)
         early_stopping(val_loss_total, net, epoch)
-        loss_file.write(f"{fold_i},{epoch+1},{running_loss/len(trainloader)},{expression_loss/len(trainloader)}," \
-                        f"{splice_loss/len(trainloader)},{val_mse_all},{val_r2_all},{val_loss_total},{val_loss_expr}," \
-                        f"{val_loss_splice}\n")
-        loss_file.flush()
+        if saved_model_path is not None:
+            loss_file.write(f"{fold_i},{epoch+1},{running_loss/len(trainloader)},{expression_loss/len(trainloader)}," \
+                            f"{splice_loss/len(trainloader)},{val_mse_all},{val_r2_all},{val_loss_total},{val_loss_expr}," \
+                            f"{val_loss_splice}\n")
+            loss_file.flush()
         if model_logger is not None:
             label_type = net.name.split('.')[-1]
             model_logger.add([fold_i, epoch, running_loss/len(trainloader), val_mse_all, val_pr_all, val_r2_all, 

@@ -8,11 +8,12 @@ def anti_mse_loss(pred, target, alpha=0.3):
     return mse + alpha * confidence_penalty
 
 
-def dense_loss(pred, target, dw): # from https://link.springer.com/article/10.1007/s10994-021-06023-5
+def dense_loss(pred, target, dw, loss_fn, **kwargs): # from https://link.springer.com/article/10.1007/s10994-021-06023-5
     if dw is None:
-        return nn.SmoothL1Loss()(pred, target)
-    weight = dw(target.float().cpu().detach().numpy()) 
-    loss = anti_mse_loss(pred, target, alpha=1).cpu().detach().numpy()
+        return loss_fn(pred, target)
+    weight = dw(target.float().cpu().detach().numpy()) # shape: (16,)
+    loss = loss_fn(pred, target, **kwargs).cpu().detach().numpy() # shape: (16,1)
+    loss = loss.reshape(-1)  # Flatten the loss to match the weight shape
     weighted_loss = weight * loss
     return torch.tensor(weighted_loss.mean(), dtype=torch.float32, device=pred.device)
 
@@ -32,7 +33,7 @@ def hurdle_loss(binary_logits, splicing_pred, target, loss_type='l1', dw=None, p
         elif loss_type == 'mse':
             regression_loss_fn = nn.MSELoss()
         elif loss_type == 'dense': 
-            regression_loss_fn = lambda x, y: dense_loss(x, y, dw)
+            regression_loss_fn = lambda x, y: dense_loss(x, y, dw, loss_fn=nn.MSELoss())
         else:
             raise ValueError(f"Unsupported loss type: {loss_type}")
 
