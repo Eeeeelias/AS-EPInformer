@@ -12,10 +12,10 @@ def dense_loss(pred, target, dw, loss_fn, **kwargs): # from https://link.springe
     if dw is None:
         return loss_fn(pred, target)
     weight = dw(target.float().cpu().detach().numpy()) # shape: (16,)
-    loss = loss_fn(pred, target, **kwargs).cpu().detach().numpy() # shape: (16,1)
-    loss = loss.reshape(-1)  # Flatten the loss to match the weight shape
-    weighted_loss = weight * loss
-    return torch.tensor(weighted_loss.mean(), dtype=torch.float32, device=pred.device)
+    weights = torch.tensor(weight, dtype=torch.float32, device=pred.device).view(-1, 1)  # Convert to tensor to preserve backprop
+    losses = loss_fn(pred, target, **kwargs) # shape: (16,1)
+    weighted_losses = losses * weights
+    return weighted_losses.mean()
 
 
 def hurdle_loss(binary_logits, splicing_pred, target, loss_type='l1', dw=None, pos_weight=None):

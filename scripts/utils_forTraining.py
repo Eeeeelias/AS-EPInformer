@@ -10,6 +10,7 @@ import torch.utils.data as data_utils
 from torch.utils.data import Subset
 from torch.nn.utils import parameters_to_vector
 from torch.nn.functional import cosine_similarity
+from torchviz import make_dot
 
 from denseweight import DenseWeight
 
@@ -19,6 +20,7 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 # logging
 # from model.EPInformer import EPInformer_v2, enhancer_predictor_256bp
+from scripts.EarlyStopping import EarlyStopping
 from scripts.loss_functions import dense_loss
 
 def get_lr(optimizer):
@@ -36,7 +38,7 @@ def combine_hurdle_outputs(binary_logits, splicing_pred, threshold=0.5):
     return list(final_pred.cpu().detach().numpy())
 
 
-def get_sample_weights(trainloader, device='cpu'):
+def get_sample_weights(trainloader, device='cpu', filter_ones=True):
     dw = DenseWeight(alpha=0.6)
     psi_reg = []
     psi_binary = []
@@ -46,8 +48,11 @@ def get_sample_weights(trainloader, device='cpu'):
         # add to psi binary 1 if the value is 1.0, else 0
         psi_binary.extend((flat_psi == 1.0).astype(int))
         # filter out 1.0 values since they are protected by the hurdle
-        flat_psi = flat_psi[flat_psi != 1.0]
-        if len(flat_psi) > 0:
+        if filter_ones:
+            flat_psi = flat_psi[flat_psi != 1.0]
+            if len(flat_psi) > 0:
+                psi_reg.extend(flat_psi)
+        else:
             psi_reg.extend(flat_psi)
     dw.fit(np.array(psi_reg))
 
@@ -87,122 +92,6 @@ def combine_losses(loss_expr, loss_splice, predict_type='multi', weights=(1.0, 1
         loss = loss_expr
         
     return loss
-
-
-class Logger():
-    """A logging class that can report or save metrics.
-
-    This class contains a simple utility for saving statistics as they are
-    generated, saving a report to a text file at the end, and optionally
-    print the report to screen one line at a time as it is being generated.
-    Must begin using the `start` method, which will reset the logger.
-
-    Parameters
-    ----------
-    names: list or tuple
-        An iterable containing the names of the columns to be logged.
-
-    verbose: bool, optional
-        Whether to print to screen during the logging.
-    """
-
-    def __init__(self, names, verbose=False):
-        self.names = names
-        self.verbose = verbose
-        self.data = {name: [] for name in self.names}
-
-    def start(self):
-        """Begin the recording process."""
-
-        if self.verbose:
-            print("\t".join(self.names))
-
-    def add(self, row):
-        """Add a row to the log.
-
-        This method will add one row to the log and, if verbosity is set,
-        will print out the row to the log. The row must be the same length
-        as the names given at instantiation.
-
-        Parameters
-        ----------
-        args: tuple or list
-            An iterable containing the statistics to be saved.
-        """
-
-        assert len(row) == len(self.names)
-
-        for name, value in zip(self.names, row):
-            self.data[name].append(value)
-
-        if self.verbose:
-            print("\t".join(map(str, [round(x, 4) if isinstance(x, float) else x
-                for x in row])))
-
-    def save(self, name):
-        """Write a log to disk.
-
-
-        Parameters
-        ----------
-        name: str
-            The filename to save the logs to.
-        """
-        pd.DataFrame(self.data).to_csv(name, sep='\t', index=False)
-
-class EarlyStopping:
-    """Early stops the training if validation loss doesn't improve after a given patience."""
-    def __init__(self, patience=3, verbose=False, delta=0, path=None):
-        """
-        Args:
-            patience (int): How long to wait after last time validation loss improved.
-                            Default: 6
-            verbose (bool): If True, prints a message for each validation loss improvement.
-                            Default: False
-            delta (float): Minimum change in the monitored quantity to qualify as an improvement.
-                            Default: 0
-            path (str): Path for the checkpoint to be saved to.
-                            Default: 'checkpoint.pt'
-        """
-        self.patience = patience
-        self.verbose = verbose
-        self.counter = 0
-        self.best_score = None
-        self.early_stop = False
-        self.val_loss_min = np.inf
-        self.delta = delta
-        self.path = path
-
-    def __call__(self, val_loss, model, epoch_i):
-        score = -val_loss.cpu().detach().numpy()  # We want to minimize the validation loss
-        if self.best_score is None:
-            self.best_score = score
-            self.save_checkpoint(val_loss, model, epoch_i)
-        elif score < self.best_score + self.delta:
-            self.counter += 1
-            print(f'EarlyStopping counter: {self.counter} out of {self.patience}', 'best_score', self.best_score)
-            if self.counter >= self.patience:
-                self.early_stop = True
-        else:
-            self.best_score = score
-            self.save_checkpoint(val_loss, model, epoch_i)
-            self.counter = 0
-
-    def save_checkpoint(self, val_loss, model, epoch_i):
-        '''Saves model when validation loss decrease.'''
-        if self.verbose:
-            print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
-
-        if self.path is not None:
-            torch.save({
-                        'epoch': epoch_i,
-                        'model_state_dict': model.state_dict(),
-                        'loss': val_loss,
-                        },
-                        self.path)
-            print('Saving ckpt at', self.path)
-        # torch.save(model.state_dict(), self.path)
-        self.val_loss_min = val_loss
 
 
 def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, 
@@ -294,6 +183,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             splice_loss += loss_splice.item()
 
             loss = combine_losses(loss_expr, loss_splice, predict_type=predict)
+            if not os.path.exists("graph.png"):
+                print("Creating computation graph for the first time")
+                make_dot(loss, params=dict(net.named_parameters())).render("graph", format="png")
             # propagate the loss backward
             loss.backward()
             # update the gradients
