@@ -202,7 +202,11 @@ class promoter_enhancer_dataset(Dataset):
         if self.zero_out_pe_data:
             pe_code_tensor = torch.zeros_like(pe_code_tensor)
         if self.zero_out_rna_data:
-            rnaFeat_tensor = torch.zeros_like(rnaFeat_tensor)
+            # replace everything but the promoter activity with zeros
+            if self.usePromoterSignal and self.n_extraFeat > 1:
+                rnaFeat_tensor[:-1] = 0
+            else:
+                rnaFeat_tensor = torch.zeros_like(rnaFeat_tensor)
         if self.zero_out_feat_data:
             pe_feat_tensor = torch.zeros_like(pe_feat_tensor)
         if self.zero_out_exons:

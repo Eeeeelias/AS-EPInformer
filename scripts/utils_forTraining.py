@@ -135,7 +135,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         pos_weight = None
 
     # Loss functions
-    L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type, reduction='none')
+    reduction = 'mean' if not weigh_samples else 'none'
+    L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type, reduction=reduction)
     learned_loss = True if loss_class is not None else False
 
     all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters())

@@ -159,7 +159,7 @@ class EPInformer_v2(nn.Module):
         if pre_trained_encoder is not None:
             self.seq_encoder = pre_trained_encoder
             self.name = f'EPInformerV2.preTrainedConv.{base_size}base.{out_dim}dim.{n_encoder}Trans.{head}head.{useBN}BN.' \
-                        f'{useLN}LN.{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh.{exon_data}exon'
+                        f'{useLN}LN.{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh.{exon_data}exon.{separate_attention}exonAttn'
         else:
             self.seq_encoder = seq_256bp_encoder(base_size=base_size)
             self.name = f'EPInformerV2.{base_size}base.{out_dim}dim.{n_encoder}Trans.{head}head.{useBN}BN.{useLN}LN.' \
@@ -299,6 +299,10 @@ class EPInformer_v2(nn.Module):
         assert additional_dim >= 4, "additional_dim must be at least 4 for exon attention mask"
 
         attn_mask = (~np.identity(self.n_enhancer+additional_dim).astype(bool))
+        # attend promoter
+        attn_mask[:, 0] = False
+        attn_mask[0, :] = False
+        # attend last three tokens (intron/exon segments)
         attn_mask[:, -n_attend_last:] = False
         attn_mask[-n_attend_last:, :] = False
         attn_mask = torch.from_numpy(attn_mask)

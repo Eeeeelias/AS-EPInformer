@@ -181,7 +181,7 @@ fold_list = args.fold
 n_encoder = args.n_interact_enc
 batch_size = args.batch_size 
 expr_type = args.expr_assay
-n_enhancers = 60
+n_enhancers = 0
 #################
 
 today = datetime.now()   # Get date
