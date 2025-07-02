@@ -91,7 +91,7 @@ def create_set_indices(all_ids, train_ratio=0.8, valid_ratio=0.1, events=False, 
     return train_ids, valid_ids, test_ids
 
 def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float = 0.15, test_frac: float = 0.15, 
-                        seed: int = 42, short_run=False) -> tuple[list[str], list[str], list[str]]:
+                        seed: int = 42, short_run=False, pre_splits=None, fold_i=None) -> tuple[list[str], list[str], list[str]]:
     """
     Splits event IDs into train/val/test sets, grouping by gene of each ID.
     
@@ -113,23 +113,36 @@ def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float
         key_to_indices[key].append(idx)
 
     # Shuffle keys deterministically
-    random.seed(seed)
-    all_keys = list(key_to_indices.keys())
-    random.shuffle(all_keys)
+    if pre_splits is not None:
+        print("Using predefined chromosome splits")
+        # Use predefined splits from the DataFrame
+        train_keys = pre_splits[pre_splits[fold_i] == 'train'].index.tolist()
+        val_keys = pre_splits[pre_splits[fold_i] == 'valid'].index.tolist()
+        test_keys = pre_splits[pre_splits[fold_i] == 'test'].index.tolist()
 
-    # Compute split cutoffs
-    n = len(all_keys)
-    train_cutoff = int(train_frac * n)
-    val_cutoff = int((train_frac + val_frac) * n)
+        train_indices = [idx for k in train_keys for idx in key_to_indices[k]]
+        val_indices = [idx for k in val_keys for idx in key_to_indices[k]]
+        test_indices = [idx for k in test_keys for idx in key_to_indices[k]]
 
-    train_keys = all_keys[:train_cutoff]
-    val_keys = all_keys[train_cutoff:val_cutoff]
-    test_keys = all_keys[val_cutoff:]
+    else:
+        # Shuffle keys randomly
+        random.seed(seed)
+        all_keys = list(key_to_indices.keys())
+        random.shuffle(all_keys)
 
-    # Gather indices
-    train_indices = [idx for k in train_keys for idx in key_to_indices[k]]
-    val_indices = [idx for k in val_keys for idx in key_to_indices[k]]
-    test_indices = [idx for k in test_keys for idx in key_to_indices[k]]
+        # Compute split cutoffs
+        n = len(all_keys)
+        train_cutoff = int(train_frac * n)
+        val_cutoff = int((train_frac + val_frac) * n)
+
+        train_keys = all_keys[:train_cutoff]
+        val_keys = all_keys[train_cutoff:val_cutoff]
+        test_keys = all_keys[val_cutoff:]
+
+        # Gather indices
+        train_indices = [idx for k in train_keys for idx in key_to_indices[k]]
+        val_indices = [idx for k in val_keys for idx in key_to_indices[k]]
+        test_indices = [idx for k in test_keys for idx in key_to_indices[k]]
 
     if short_run:
         # Limit the number of samples for a short run
@@ -181,7 +194,7 @@ fold_list = args.fold
 n_encoder = args.n_interact_enc
 batch_size = args.batch_size 
 expr_type = args.expr_assay
-n_enhancers = 0
+n_enhancers = 60
 #################
 
 today = datetime.now()   # Get date
@@ -219,7 +232,8 @@ for fi in fold_list:
     #                                                    events=True, seed=42+int(fi))
     if args.include_exons:
         train_idx, valid_idx, test_idx = split_multitask_ids(all_ds.event_keys, train_frac=0.8, val_frac=0.1, 
-                                                             test_frac=0.1, seed=42+int(fi), short_run=args.short_run)
+                                                             test_frac=0.1, seed=42+int(fi), short_run=args.short_run, 
+                                                             pre_splits=split_df, fold_i=fold_i)
     else:
         train_idx, valid_idx, test_idx = create_set_indices(all_ds, train_ratio=0.8, valid_ratio=0.1,
                                                             events=False, seed=42+int(fi), splits=split_df, fold_i=fold_i)

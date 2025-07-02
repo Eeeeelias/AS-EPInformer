@@ -52,6 +52,45 @@ class seq_256bp_encoder(nn.Module):
             x_enhancer = self.conv_tower[i](x_enhancer)
             x_enhancer = self.conv_tower[i+1](x_enhancer) + x_enhancer
         return x_enhancer
+    
+
+class seq_256bp_encoder_small(nn.Module):
+    def __init__(self, base_size=4, out_dim=128, conv_dim=256):
+        super(seq_256bp_encoder_small, self).__init__()
+        self.conv_dim = conv_dim
+        self.out_dim = out_dim
+        self.base_size = base_size
+        self.stem_conv = nn.Sequential(
+            nn.Conv2d(in_channels = base_size, out_channels = self.conv_dim, kernel_size = (1, 8), stride = 1, padding='same'),
+            nn.ELU(),
+        )
+        self.conv_tower = nn.ModuleList([])
+        conv_dim = [self.conv_dim, 64, 128]
+        for i in range(2):
+            conv = nn.Sequential(
+                nn.Conv2d(in_channels = conv_dim[i], out_channels=conv_dim[i+1], kernel_size=(1, 3), padding=(0, 1)),
+                nn.BatchNorm2d(conv_dim[i+1]),
+                nn.ELU(),                   
+            )
+            conv_by_one = nn.Sequential(
+                nn.Conv2d(in_channels = conv_dim[i+1], out_channels=conv_dim[i+1], kernel_size=(1, 1)),
+                nn.ELU(),
+            )
+            pool = nn.MaxPool2d(kernel_size=(1, 4), stride=(1, 4))
+            self.conv_tower.append(nn.ModuleList([conv, conv_by_one, pool]))
+        
+    def forward(self, enhancers_input):
+        if enhancers_input.shape[2] == 1:
+            x_enhancer = enhancers_input
+        else:
+            x_enhancer = enhancers_input.permute(0, 3, 1, 2).contiguous()  
+        x_enhancer = self.stem_conv(x_enhancer)
+        for conv, conv_by_one, pool in self.conv_tower:
+            x_enhancer = conv(x_enhancer)
+            x_enhancer = conv_by_one(x_enhancer)
+            x_enhancer = pool(x_enhancer)
+        return x_enhancer
+    
 
 class enhancer_predictor_256bp(nn.Module):
     def __init__(self):
@@ -75,6 +114,7 @@ class enhancer_predictor_256bp(nn.Module):
         seq_embed = self.encoder(enhancer_seq)
         epi_out = self.embedToAct(seq_embed)
         return epi_out.squeeze(-1)
+
 
 class MHAttention_encoderLayer(nn.Module):
     def __init__(self, d_model=128, nhead=8, dropout=0.):
@@ -167,7 +207,7 @@ class EPInformer_v2(nn.Module):
                         f'{separate_attention}exonAttn'
         
         if self.use_exon_data:
-            self.segment_encoder = seq_256bp_encoder(base_size=base_size)
+            self.event_encoder = seq_256bp_encoder_small(base_size=base_size)
 
         if useLN: # use layer norm
             self.attn_encoder = get_clones(MHAttention_encoderLayer(d_model=out_dim, nhead=head), self.n_encoder)
@@ -199,7 +239,7 @@ class EPInformer_v2(nn.Module):
                  # nn.Linear(38, 8), # 2kb nn.Linear(101, 8)
                 nn.ELU(),
             )
-            self.segment_conv_out = nn.Sequential(
+            self.event_conv_out = nn.Sequential(
                 nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
                 nn.BatchNorm2d(64),
                 nn.ELU(),
@@ -212,7 +252,7 @@ class EPInformer_v2(nn.Module):
                 nn.Conv2d(in_channels = 64, out_channels=32, kernel_size=(1, 1)),
                 nn.BatchNorm2d(32),
                 nn.ELU(),
-                nn.Linear(40, int(self.out_dim/32)), # added 40 to account for the segment length
+                nn.Linear(40, int(self.out_dim/32)), # added 40 to account for the event length
                 nn.ELU(),
             )
         else:
@@ -229,7 +269,7 @@ class EPInformer_v2(nn.Module):
                 # nn.Linear(38, 8), # 2kb nn.Linear(101, 8)
                 nn.ELU(),
             )
-            self.segment_conv_out = nn.Sequential(
+            self.event_conv_out = nn.Sequential(
                 nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
                 nn.ELU(),
                 nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 4)),
@@ -238,7 +278,7 @@ class EPInformer_v2(nn.Module):
                 nn.ELU(),
                 nn.Conv2d(in_channels = 64, out_channels=32, kernel_size=(1, 1)),
                 nn.ELU(),
-                nn.Linear(40, int(self.out_dim/32)), # added 40 to account for the segment length
+                nn.Linear(40, int(self.out_dim/32)), # added 40 to account for the event length
                 nn.ELU(),
             )
         
@@ -295,14 +335,14 @@ class EPInformer_v2(nn.Module):
         return attn_mask
 
     def exon_attention_mask(self, additional_dim=4, n_attend_last=3):
-        # attend to the last three tokens (intron, exon, intron segment) and nothing else
+        # attend to the last three tokens (intron, exon, intron sequence) and nothing else
         assert additional_dim >= 4, "additional_dim must be at least 4 for exon attention mask"
 
         attn_mask = (~np.identity(self.n_enhancer+additional_dim).astype(bool))
         # attend promoter
         attn_mask[:, 0] = False
         attn_mask[0, :] = False
-        # attend last three tokens (intron/exon segments)
+        # attend last three tokens (intron/exon sequences)
         attn_mask[:, -n_attend_last:] = False
         attn_mask[-n_attend_last:, :] = False
         attn_mask = torch.from_numpy(attn_mask)
@@ -315,7 +355,7 @@ class EPInformer_v2(nn.Module):
         enhancers_padding_mask = ~(pe_seq.sum(-1).sum(-1) > 0).bool()
         enhancers_padding_mask[:, 0] = False # keep this only for ablation study where pe_seq is zeroed out
         if self.use_exon_data:
-            exon_padding_mask = ~(exon_seq.sum(-1).sum(-1) > 0).bool() # added padding mask for segments and combined
+            exon_padding_mask = ~(exon_seq.sum(-1).sum(-1) > 0).bool() # added padding mask for event and combined
             enhancers_padding_mask = torch.concat([enhancers_padding_mask, exon_padding_mask], dim=1)
     
 
@@ -324,8 +364,8 @@ class EPInformer_v2(nn.Module):
         pe_flatten_embed = torch.flatten(pe_embed.permute(0, 2, 1, 3), start_dim=2)
 
         if self.use_exon_data:
-            exon_embed = self.segment_encoder(exon_seq)
-            exon_embed = self.segment_conv_out(exon_embed)        
+            exon_embed = self.event_encoder(exon_seq)
+            exon_embed = self.event_conv_out(exon_embed)        
             exon_flatten_embed = torch.flatten(exon_embed.permute(0, 2, 1, 3), start_dim=2)
             pe_flatten_embed = torch.concat([pe_flatten_embed, exon_flatten_embed], dim=1)
 
@@ -337,7 +377,7 @@ class EPInformer_v2(nn.Module):
                                                  .permute(0,2,1)).permute(0,2,1)
         attn_list = []
 
-        # split self.n_encode in half (e.g. if n_encoder=6 then first 3 layers are for enhancers and last 3 layers for segments)
+        # split self.n_encode in half (e.g. if n_encoder=6 then first 3 layers are for enhancers and last 3 layers for event seqs)
         n_encoder_half = self.n_encoder // 2
         pe_flatten_embed_expr = pe_flatten_embed
         pe_flatten_embed_splice = pe_flatten_embed
