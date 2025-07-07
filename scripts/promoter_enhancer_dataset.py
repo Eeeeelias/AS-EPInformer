@@ -31,6 +31,8 @@ class promoter_enhancer_dataset(Dataset):
         self.rna_seq_source = rna_seq_source
         self.filter_for_event_genes = event_genes
         self.include_exons = include_exons
+        self.promoter_dict = {}
+        self.data_dict = {}
         # ablation test params
         self.zero_out_exons = set_exon_zero
         self.zero_out_pe_data = set_pe_zero
@@ -51,18 +53,19 @@ class promoter_enhancer_dataset(Dataset):
         self.psi_response['event_id'] = self.psi_response.index
         self.psi_response['event_type'] = self.psi_response['event_id'].apply(lambda x: 'AR' if ';AR:' in x else 'SE')
         self.all_event_genes = set(self.psi_response['gene_id'].unique())
-        if cell_type == 'K562':
-            # promoter_df = pd.read_csv('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
-            promoter_df = pd.read_csv(self.data_folder + '/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
-            promoter_df['PromoterActivity'] = np.sqrt(promoter_df['H3K27ac.RPM.TSS1Kb']*promoter_df['DHS.RPM.TSS1Kb'])
-            self.promoter_df = promoter_df
-            self.data_h5 = h5py.File(self.data_folder + '/K562_DNase_ENCFF257HEE_2kb_4DNFITUOMFUQ_enhancer_promoter_encoding.h5', 'r')
-            # self.data_h5 = h5py.File('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/K562_DNase_ENCFF257HEE_2kb_noCutOff_hic_noFlankSeq_150kb60e_AllPutative_signals_False_v2.h5')
-        elif cell_type == 'GM12878':
-            promoter_df = pd.read_csv(self.data_folder + '/GM12878_DNase_ENCFF020WZB_hic_4DNFI1UEG1HD_1MB_ABC_nominated/DNase_ENCFF020WZB_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
-            promoter_df['PromoterActivity'] = np.sqrt(promoter_df['H3K27ac.RPM.TSS1Kb']*promoter_df['DHS.RPM.TSS1Kb'])
-            self.promoter_df = promoter_df 
-            self.data_h5 = h5py.File(self.data_folder + '/GM12878_DNase_ENCFF020WZB_2kb_4DNFI1UEG1HD_promoter_enhancer_encoding.h5', 'r')
+        # K562 promoter data
+        # promoter_df = pd.read_csv('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
+        promoter_df = pd.read_csv(self.data_folder + '/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
+        promoter_df['PromoterActivity'] = np.sqrt(promoter_df['H3K27ac.RPM.TSS1Kb']*promoter_df['DHS.RPM.TSS1Kb'])
+        self.promoter_dict['K562'] = promoter_df
+        # GM12878 promoter data
+        # self.data_h5 = h5py.File('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/K562_DNase_ENCFF257HEE_2kb_noCutOff_hic_noFlankSeq_150kb60e_AllPutative_signals_False_v2.h5')
+        promoter_df = pd.read_csv(self.data_folder + '/GM12878_DNase_ENCFF020WZB_hic_4DNFI1UEG1HD_1MB_ABC_nominated/DNase_ENCFF020WZB_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
+        promoter_df['PromoterActivity'] = np.sqrt(promoter_df['H3K27ac.RPM.TSS1Kb']*promoter_df['DHS.RPM.TSS1Kb'])
+        self.promoter_dict['GM12878'] = promoter_df 
+
+        self.data_dict['K562'] = h5py.File(self.data_folder + '/K562_DNase_ENCFF257HEE_2kb_4DNFITUOMFUQ_enhancer_promoter_encoding.h5', 'r')
+        self.data_dict['GM12878'] = h5py.File(self.data_folder + '/GM12878_DNase_ENCFF020WZB_2kb_4DNFI1UEG1HD_promoter_enhancer_encoding.h5', 'r')
 
         self.expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18377_gene_expr_fromXpresso.csv', index_col='ENSID')
         self.present_genes = self.expr_df.index
@@ -79,20 +82,44 @@ class promoter_enhancer_dataset(Dataset):
             self.idx_map = {}
             # use idx map to filter for event genes
             c = 0
-            for i, gene in enumerate(self.data_h5['ensid'][:]):
+            for i, gene in enumerate(self.data_dict[cell_type]['ensid'][:]):
                 gene_id = gene.decode()
                 if gene_id in self.all_event_genes:
                     self.idx_map[c] = i
                     c += 1
 
     def __len__(self): # changed to filter for events 
+        if self.include_exons and self.cell_type == 'both':
+            return len(self.event_keys) * 2
         if self.include_exons:
             return len(self.event_keys)
         if self.filter_for_event_genes:
             return len(self.all_event_genes)
-        return len(self.data_h5['ensid'])
+        
+        return len(self.data_dict[self.cell_type]['ensid'])
 
     def __getitem__(self, idx):
+        if self.cell_type == 'K562':
+            data_h5 = self.data_dict['K562']
+            promoter_df = self.promoter_dict['K562']
+            curr_cell_type = 'K562'
+        elif self.cell_type == 'GM12878':
+            data_h5 = self.data_dict['GM12878']
+            promoter_df = self.promoter_dict['GM12878']
+            curr_cell_type = 'GM12878'
+        elif self.cell_type == 'both':
+            if idx < len(self.event_keys):
+                data_h5 = self.data_dict['K562']
+                promoter_df = self.promoter_dict['K562']
+                curr_cell_type = 'K562'
+            else:
+                idx -= len(self.event_keys)
+                data_h5 = self.data_dict['GM12878']
+                promoter_df = self.promoter_dict['GM12878']
+                curr_cell_type = 'GM12878'
+        else:
+            raise ValueError(f"Cell type {self.cell_type} not supported. Choose 'K562' or 'GM12878'.")
+        
         if self.include_exons:
             if self.idx_map is not None:
                 gene_id = self.event_keys[idx].split(";")[0]
@@ -100,16 +127,16 @@ class promoter_enhancer_dataset(Dataset):
             event = self.valid_events[idx]
             gene_id = event.split(";")[0]
             # find idx where gene_id is in the data_h5
-            idx = np.where(self.data_h5['ensid'][:] == gene_id.encode())[0][0]
+            idx = np.where(data_h5['ensid'][:] == gene_id.encode())[0][0]
 
         if self.filter_for_event_genes and self.expr_type != 'multi' and self.expr_type != 'splice':
             idx = self.idx_map[idx]
 
-        sample_ensid = self.data_h5['ensid'][idx].decode()
-        seq_code = self.data_h5['pe_code'][idx]
-        enhancer_distance = self.data_h5['distance'][idx,1:]
-        enhancer_intensity = self.data_h5['activity'][idx,1:]
-        enhancer_contact = self.data_h5['hic'][idx,1:]
+        sample_ensid = data_h5['ensid'][idx].decode()
+        seq_code = data_h5['pe_code'][idx]
+        enhancer_distance = data_h5['distance'][idx,1:]
+        enhancer_intensity = data_h5['activity'][idx,1:]
+        enhancer_contact = data_h5['hic'][idx,1:]
 
         # added exon & intron sequences
         segment_tensor = torch.Tensor([])
@@ -136,9 +163,11 @@ class promoter_enhancer_dataset(Dataset):
                                         self.one_hot_encode(downstream, vocab)])
         
         if self.signal_type == 'H3K27ac':
-            promoter_activity = self.promoter_df.loc[sample_ensid]['PromoterActivity']
+            promoter_activity = promoter_df.loc[sample_ensid]['PromoterActivity']
         elif self.signal_type == 'DNase':
-            promoter_activity = self.promoter_df.loc[sample_ensid]['normalized_dhs']
+            promoter_activity = promoter_df.loc[sample_ensid]['normalized_dhs']
+        else:
+            promoter_activity = [0]
             # enhancer_intensity = dhs_intensity
         promoter_code = seq_code[:1]
         enhancers_code = seq_code[1:]
@@ -217,19 +246,19 @@ class promoter_enhancer_dataset(Dataset):
         normal = "_normal" if self.use_normalized_psi else ""
 
         if self.expr_type == 'CAGE':
-            cage_expr = np.log10(self.expr_df.loc[sample_ensid][self.cell_type + '_CAGE_128*3_sum']+1)
+            cage_expr = np.log10(self.expr_df.loc[sample_ensid][curr_cell_type + '_CAGE_128*3_sum']+1)
             expr_tensor = torch.from_numpy(np.array([cage_expr])).float()
         elif self.expr_type == 'RNA' and self.rna_seq_source == 'xpresso':
-            rna_expr = self.expr_df.loc[sample_ensid]['Actual_' + self.cell_type]
+            rna_expr = self.expr_df.loc[sample_ensid]['Actual_' + curr_cell_type]
             expr_tensor = torch.from_numpy(np.array([rna_expr])).float()
         elif self.expr_type == 'RNA' and self.rna_seq_source == 'epiatlas':
-            rna_expr = self.epiatlas_expr_df.loc[sample_ensid][self.cell_type]
+            rna_expr = self.epiatlas_expr_df.loc[sample_ensid][curr_cell_type]
             expr_tensor = torch.from_numpy(np.array([rna_expr])).float()
             
         elif self.expr_type == 'multi' or self.expr_type == 'splice':
             event_expr = self.psi_response.loc[event]
-            expr_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}{self.tpm_level}{normal}'])).float()
-            psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi{normal}'])).float()
+            expr_tensor = torch.from_numpy(np.array(event_expr[f'{curr_cell_type}{self.tpm_level}{normal}'])).float()
+            psi_tensor = torch.from_numpy(np.array(event_expr[f'{curr_cell_type}_SE_psi{normal}'])).float()
         
         else:
             assert False, 'Label does not exist!'
@@ -238,10 +267,13 @@ class promoter_enhancer_dataset(Dataset):
 
     def get_valid_genes(self):
         if not self.include_exons:
-            return [x.decode() for x in self.data_h5['ensid'][:]]
+            return [x.decode() for x in self.data_dict[self.cell_type]['ensid'][:]]
         gene_ids = [x.split(";")[0] for x in self.event_keys]
         print(f"Found {len(gene_ids)} unique genes in the dataset, {len(set(gene_ids))} after removing duplicates.")
-        ensid_list = set([x.decode() for x in self.data_h5['ensid'][:]])
+        if self.cell_type == 'both':
+            ensid_list = set([x.decode() for x in self.data_dict['K562']['ensid'][:]]) # just use K562 ensids since both cell lines have the same genes
+        else:
+            ensid_list = set([x.decode() for x in self.data_dict[self.cell_type]['ensid'][:]])
         found_gene_ids = set([x for x in gene_ids if x in ensid_list])
         return [x for x in self.event_keys if x.split(";")[0] in found_gene_ids]
 

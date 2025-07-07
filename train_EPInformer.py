@@ -15,7 +15,7 @@ import scripts.promoter_enhancer_dataset as pe_dataset
 parser = argparse.ArgumentParser()
 def list_of_strings(arg):
     return arg.split(',')
-parser.add_argument('--cell', type=str, help='cell line (support K562 and GM12878)', choices=['K562', 'GM12878'])  
+parser.add_argument('--cell', type=str, help='cell line (support K562 and GM12878, both for combined)', choices=['K562', 'GM12878', 'both'], default='K562')  
 parser.add_argument("--fold", type=list_of_strings, help="test fold", default='all')
 parser.add_argument("--model_type", type=str, help='EPInformer type', default='EPInformer-PE-Activity', 
                     choices=['EPInformer-PE', 'EPInformer-PE-Activity', 'EPInformer-PE-Activity-HiC'])  
@@ -91,7 +91,7 @@ def create_set_indices(all_ids, train_ratio=0.8, valid_ratio=0.1, events=False, 
     return train_ids, valid_ids, test_ids
 
 def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float = 0.15, test_frac: float = 0.15, 
-                        seed: int = 42, short_run=False, pre_splits=None, fold_i=None) -> tuple[list[str], list[str], list[str]]:
+                        seed: int = 42, short_run=False, pre_splits=None, fold_i=None, both_cell_lines=False) -> tuple[list[str], list[str], list[str]]:
     """
     Splits event IDs into train/val/test sets, grouping by gene of each ID.
     
@@ -123,6 +123,7 @@ def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float
         train_indices = [idx for k in train_keys for idx in key_to_indices[k]]
         val_indices = [idx for k in val_keys for idx in key_to_indices[k]]
         test_indices = [idx for k in test_keys for idx in key_to_indices[k]]
+        print(f"Using predefined splits: {len(train_indices)} train")
 
     else:
         # Shuffle keys randomly
@@ -143,6 +144,13 @@ def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float
         train_indices = [idx for k in train_keys for idx in key_to_indices[k]]
         val_indices = [idx for k in val_keys for idx in key_to_indices[k]]
         test_indices = [idx for k in test_keys for idx in key_to_indices[k]]
+
+    if both_cell_lines:
+        # add the len(idx) to all indices since the len of the dataset is len(event_keys) * 2
+        train_indices = train_indices + [idx + len(ids) for idx in train_indices]
+        val_indices = val_indices + [idx + len(ids) for idx in val_indices]
+        test_indices = test_indices + [idx + len(ids) for idx in test_indices]
+        print(f"Both cell lines included, total indices: {len(train_indices)}")
 
     if short_run:
         # Limit the number of samples for a short run
@@ -233,7 +241,7 @@ for fi in fold_list:
     if args.include_exons:
         train_idx, valid_idx, test_idx = split_multitask_ids(all_ds.event_keys, train_frac=0.8, val_frac=0.1, 
                                                              test_frac=0.1, seed=42+int(fi), short_run=args.short_run, 
-                                                             pre_splits=split_df, fold_i=fold_i)
+                                                             pre_splits=split_df, fold_i=fold_i, both_cell_lines=(cell == 'both'))
     else:
         train_idx, valid_idx, test_idx = create_set_indices(all_ds, train_ratio=0.8, valid_ratio=0.1,
                                                             events=False, seed=42+int(fi), splits=split_df, fold_i=fold_i)

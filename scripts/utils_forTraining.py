@@ -20,7 +20,7 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 # logging
 # from model.EPInformer import EPInformer_v2, enhancer_predictor_256bp
-from scripts.EarlyStopping import EarlyStopping
+from scripts.EarlyStopping import EarlyStopping, EarlyStoppingMulti
 from scripts.loss_functions import dense_loss
 
 def get_lr(optimizer):
@@ -80,10 +80,10 @@ def get_loss_function(expr_loss_type='mse', splice_loss_type='bce', **kwargs):
     return L_expr, L_splice
 
 
-def combine_losses(loss_expr, loss_splice, predict_type='multi', weights=(1.0, 1.0, 1.0)):
+def combine_losses(loss_expr, loss_splice, predict_type='multi', weights=(1.0, 1.0)):
     loss = None
     if predict_type == 'multi':
-        loss = loss_expr + loss_splice
+        loss = weights[0] * loss_expr + weights[1] * loss_splice
 
     elif predict_type == 'splice':
         loss = loss_splice
@@ -119,10 +119,10 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
     if saved_model_path is not None:
-        early_stopping = EarlyStopping(patience=3, path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
+        early_stopping = EarlyStoppingMulti(patience=3, path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
                                     verbose=True)
     else:
-        early_stopping = EarlyStopping(patience=3, verbose=True)
+        early_stopping = EarlyStoppingMulti(patience=3, verbose=True)
     
     
     # get all PSI values from training dataset
@@ -138,6 +138,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     reduction = 'mean' if not weigh_samples else 'none'
     L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type, reduction=reduction)
     learned_loss = True if loss_class is not None else False
+    loss_weights = [1.0, 1.0] # modified by early stopping
 
     all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters())
     optimizer = torch.optim.AdamW(all_params, lr=learning_rate, weight_decay=1e-6)
@@ -183,7 +184,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             expression_loss += loss_expr.item()
             splice_loss += loss_splice.item()
 
-            loss = combine_losses(loss_expr, loss_splice, predict_type=predict)
+            loss = combine_losses(loss_expr, loss_splice, predict_type=predict, weights=loss_weights)
             if not os.path.exists("graph.png"):
                 print("Creating computation graph for the first time")
                 make_dot(loss, params=dict(net.named_parameters())).render("graph", format="png")
@@ -203,7 +204,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         
         val_pr_we, val_r2_we = val_pr_all, val_r2_all
         print('Validation R square all:', val_r2_all)
-        early_stopping(val_loss_total, net, epoch)
+        early_stopping(val_loss_expr, val_loss_splice, net, epoch)
         if saved_model_path is not None:
             loss_file.write(f"{fold_i},{epoch+1},{running_loss/len(trainloader)},{expression_loss/len(trainloader)}," \
                             f"{splice_loss/len(trainloader)},{val_mse_all},{val_r2_all},{val_loss_total},{val_loss_expr}," \
@@ -214,9 +215,15 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             model_logger.add([fold_i, epoch, running_loss/len(trainloader), val_mse_all, val_pr_all, val_r2_all, 
                               val_pr_we, val_r2_we, early_stopping.counter, label_type])
             # model_logger.save("./EPInfomrer_log/{}.crossValid.log".format(net.name.replace('.'+label_type, '')))
-        if early_stopping.early_stop:
+        if early_stopping.expr_early_stop and early_stopping.splice_early_stop:
             print("Early stopping")
             break
+        elif early_stopping.expr_early_stop:
+            print("Early stopping on expression loss")
+            loss_weights[0] = 0.0
+        elif early_stopping.splice_early_stop:
+            print("Early stopping on splice loss")
+            loss_weights[1] = 0.0
     return lrs
 
 def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_size=16, device = 'cuda', 
