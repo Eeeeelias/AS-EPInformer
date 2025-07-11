@@ -229,7 +229,7 @@ class EPInformer_v2(nn.Module):
                 nn.ReLU(),
         )
 
-    def forward(self, pe_seq, exon_seq, rna_feat=None, extraFeat=None):
+    def forward(self, pe_seq, exon_seq, rna_feat=None, extraFeat=None, cell_info=None):
         # if enhancers_padding_mask is None:
         enhancers_padding_mask = ~(pe_seq.sum(-1).sum(-1) > 0).bool()
         

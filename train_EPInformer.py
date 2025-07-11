@@ -45,6 +45,7 @@ parser.add_argument('--set_pe_zero', action='store_true', help='Set promoter/enh
 parser.add_argument('--set_rna_zero', action='store_true', help='Set RNA half life data to zero for testing purposes')
 parser.add_argument('--set_extra_feat_zero', action='store_true', help='Set extra features (HiC, Activity, Distance) to zero for testing purposes')
 parser.add_argument('--set_promoter_zero', action='store_true', help='Set promoter data to zero for testing purposes')
+parser.add_argument('--remove_ar_events', action='store_true', help='Remove artificial events from the dataset')
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -234,7 +235,8 @@ for fi in fold_list:
                                                   single_event_train=args.single_events, event_genes=args.event_genes,
                                                   set_exon_zero=args.set_exon_zero, set_pe_zero=args.set_pe_zero,
                                                   set_rna_zero=args.set_rna_zero, set_extra_feat_zero=args.set_extra_feat_zero,
-                                                  set_promoter_zero=args.set_promoter_zero)
+                                                  set_promoter_zero=args.set_promoter_zero, remove_ar=args.remove_ar_events,
+                                                  one_tpm_ar=False)
     # create train, valid, test indices
     #train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1, 
     #                                                    events=True, seed=42+int(fi))

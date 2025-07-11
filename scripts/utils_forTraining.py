@@ -43,7 +43,7 @@ def get_sample_weights(trainloader, device='cpu', filter_ones=True):
     psi_reg = []
     psi_binary = []
     for data in trainloader:
-        _, _, _, _, _, y_psi, _ = data
+        _, _, _, _, _, _, y_psi, _ = data
         flat_psi = y_psi.flatten().cpu().numpy()
         # add to psi binary 1 if the value is 1.0, else 0
         psi_binary.extend((flat_psi == 1.0).astype(int))
@@ -83,7 +83,13 @@ def get_loss_function(expr_loss_type='mse', splice_loss_type='bce', **kwargs):
 def combine_losses(loss_expr, loss_splice, predict_type='multi', weights=(1.0, 1.0)):
     loss = None
     if predict_type == 'multi':
-        loss = weights[0] * loss_expr + weights[1] * loss_splice
+        if weights[0] == -np.inf: # expression loss should not be used
+            loss = loss_splice
+        if weights[1] == -np.inf: # splice loss should not be used
+            loss = loss_expr
+        if not (weights[0] == -np.inf or weights[1] == -np.inf): # both losses should be used
+            # if both weights are not -inf, combine the losses
+            loss = weights[0] * loss_expr + weights[1] * loss_splice
 
     elif predict_type == 'splice':
         loss = loss_splice
@@ -119,7 +125,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
     if saved_model_path is not None:
-        early_stopping = EarlyStoppingMulti(patience=3, path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
+        early_stopping = EarlyStoppingMulti(patience=2, path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
                                     verbose=True)
     else:
         early_stopping = EarlyStoppingMulti(patience=3, verbose=True)
@@ -163,17 +169,17 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         for data in tqdm(trainloader):
             # print(inputs.size())
             optimizer.zero_grad()
-            input_pe, input_seg, input_feat, input_dist, y_expr, y_psi, _ = data
+            input_pe, input_seg, input_feat, input_dist, input_cell, y_expr, y_psi, _ = data
             input_pe = input_pe.float().to(device)
-
             input_seg = input_seg.float().to(device)
             input_feat = input_feat.float().to(device)
             input_dist = input_dist.float().to(device)
+            input_cell = input_cell.float().to(device)
 
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
 
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist)
+            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
 
             loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
             loss_splice = L_splice(pred_splice, y_psi.reshape(pred_splice.shape))
@@ -220,10 +226,10 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             break
         elif early_stopping.expr_early_stop:
             print("Early stopping on expression loss")
-            loss_weights[0] = 0.0
+            loss_weights[0] = -np.inf
         elif early_stopping.splice_early_stop:
             print("Early stopping on splice loss")
-            loss_weights[1] = 0.0
+            loss_weights[1] = -np.inf
     return lrs
 
 def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_size=16, device = 'cuda', 
@@ -242,10 +248,11 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         splice_loss = 0
         for data in validloader:
             # print(inputs.size())
-            input_pe, input_seg, input_feat, input_dist, y_expr, y_psi, _ = data
+            input_pe, input_seg, input_feat, input_dist, input_cell, y_expr, y_psi, _ = data
             input_pe = input_pe.float().to(device)
             input_seg = input_seg.float().to(device)
             input_feat = input_feat.float().to(device)
+            input_cell = input_cell.float().to(device)
             # input_dist = input_dist.long().to(device)
             input_dist = input_dist.float().to(device)
             # print(input_dist.shape, input_dist)
@@ -253,7 +260,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
             # print(input_P.shape, input_E.shape, input_Emask.shape)
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist)
+            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
 
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
@@ -337,6 +344,7 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
         actual = []
         preds_psi = []
         actual_psi = []
+        cell_line = []
         uncorr_pred_expr = []
         uncorr_pred_splice = []
         uncorr_actual_expr = []
@@ -344,15 +352,16 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
 
         ensid_list = []
         for data in tqdm(testloader):
-            input_pe, input_seg, input_feat, input_dist, y_expr, y_psi, eid = data
+            input_pe, input_seg, input_feat, input_dist, input_cell, y_expr, y_psi, eid = data
             input_pe = input_pe.float().to(device)
             input_seg = input_seg.float().to(device)
             input_feat = input_feat.float().to(device)
+            input_cell = input_cell.float().to(device)
             # input_dist = input_dist.long().to(device)
             input_dist = input_dist.float().to(device)
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist)
+            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
 
             if normals:
                 uncorr_pred_ep = pred_expr.clone()
@@ -375,6 +384,9 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
                 pred_splice = torch.tensor(corr_pred_splice, device=device)
                 y_psi = torch.tensor(corr_y_psi, device=device)
 
+            cell_lines = input_cell[:, 0].cpu().numpy()
+            # if position is 0 then it's cell GM12878 else it's K562
+            cell_lines = ['GM12878' if cl == 0 else 'K562' for cl in cell_lines]
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
 
@@ -387,6 +399,7 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             preds += outputs
             actual += labels
             ensid_list += eid
+            cell_line += cell_lines
 
             if normals:
                 uncorr_pred_expr += list(uncorr_pred_ep.flatten().cpu().detach().numpy())
@@ -399,6 +412,7 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
     df = pd.DataFrame(index=np.array(ensid_list).flatten())
     df['PredExpr'] = preds
     df['ActualExpr'] = actual
+    df['CellLine'] = cell_line
     if len(preds) == len(preds_psi):
         df['PredPsi'] = preds_psi
         df['ActualPsi'] = actual_psi

@@ -350,7 +350,7 @@ class EPInformer_v2(nn.Module):
         return attn_mask
 
 
-    def forward(self, pe_seq, exon_seq, rna_feat=None, extraFeat=None):
+    def forward(self, pe_seq, exon_seq, rna_feat=None, extraFeat=None, cell_line=None):
         # if enhancers_padding_mask is None:
         enhancers_padding_mask = ~(pe_seq.sum(-1).sum(-1) > 0).bool()
         enhancers_padding_mask[:, 0] = False # keep this only for ablation study where pe_seq is zeroed out
@@ -358,7 +358,7 @@ class EPInformer_v2(nn.Module):
             exon_padding_mask = ~(exon_seq.sum(-1).sum(-1) > 0).bool() # added padding mask for event and combined
             enhancers_padding_mask = torch.concat([enhancers_padding_mask, exon_padding_mask], dim=1)
     
-
+        # encoding layer
         pe_embed = self.seq_encoder(pe_seq)
         pe_embed = self.conv_out(pe_embed)
         pe_flatten_embed = torch.flatten(pe_embed.permute(0, 2, 1, 3), start_dim=2)
@@ -370,13 +370,14 @@ class EPInformer_v2(nn.Module):
             pe_flatten_embed = torch.concat([pe_flatten_embed, exon_flatten_embed], dim=1)
 
         if extraFeat is not None:
-            # fill extraFeat with zeros on dim 1
+            # fill extraFeat with zeros on dim 1 because we have no promoter signal there
             if self.use_exon_data:
-                extraFeat = F.pad(extraFeat, pad=(0,0,0,3))
+                extraFeat = F.pad(extraFeat, pad=(0,0,0,3))            
             pe_flatten_embed = self.add_pos_conv(torch.concat([pe_flatten_embed, extraFeat], axis=-1)
                                                  .permute(0,2,1)).permute(0,2,1)
-        attn_list = []
 
+        # attention layers
+        attn_list = []
         # split self.n_encode in half (e.g. if n_encoder=6 then first 3 layers are for enhancers and last 3 layers for event seqs)
         n_encoder_half = self.n_encoder // 2
         pe_flatten_embed_expr = pe_flatten_embed
@@ -392,10 +393,17 @@ class EPInformer_v2(nn.Module):
         p_embed_expr = torch.flatten(pe_flatten_embed_expr[:,0,:], start_dim=1)
         p_embed_splice = torch.flatten(pe_flatten_embed_splice[:,0,:], start_dim=1)
 
+        # concat with RNA data (+ promoter)
         if self.useFeat:
+            # hijack the first three rna_feat with the cell_line info
+            if cell_line is not None:
+                rna_feat = torch.cat([cell_line, rna_feat[..., 3:]], dim=-1)
+                
             p_embed_expr = torch.cat([p_embed_expr, rna_feat], dim=-1) 
             p_embed_splice = torch.cat([p_embed_splice, rna_feat], dim=-1) 
 
+
+        # prediction heads
         p_expr = self.pToExpr(p_embed_expr)
 
         if self.use_exon_data:

@@ -17,7 +17,8 @@ class promoter_enhancer_dataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
                  rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False,
-                 set_exon_zero=False, set_pe_zero=False, set_rna_zero=False, set_extra_feat_zero=False, set_promoter_zero=False):
+                 set_exon_zero=False, set_pe_zero=False, set_rna_zero=False, set_extra_feat_zero=False, 
+                 set_promoter_zero=False, remove_ar=False, one_tpm_ar=False):
         self.expr_type = expr_type
         self.cell_type = cell_type
         self.data_folder = data_folder
@@ -31,6 +32,7 @@ class promoter_enhancer_dataset(Dataset):
         self.rna_seq_source = rna_seq_source
         self.filter_for_event_genes = event_genes
         self.include_exons = include_exons
+        self.one_tpm_ar = one_tpm_ar
         self.promoter_dict = {}
         self.data_dict = {}
         # ablation test params
@@ -39,6 +41,7 @@ class promoter_enhancer_dataset(Dataset):
         self.zero_out_rna_data = set_rna_zero
         self.zero_out_feat_data = set_extra_feat_zero
         self.zero_out_promoter = set_promoter_zero
+        self.remove_ar = remove_ar
         
         if not self.include_exons and (self.expr_type == 'multi' or self.expr_type == 'splice'):
             print("INFO: Exons will be included automatically for multi or transcript expression types.")
@@ -48,10 +51,16 @@ class promoter_enhancer_dataset(Dataset):
         self.tpm_level = "_summed_tpm" if tpm == 'transcript' else "_gene_level_tpm"
         self.gene_sequences = h5py.File(self.data_folder + '/event_sequences.h5', 'r')
         self.event_keys = list(self.gene_sequences.keys())
+        if self.remove_ar:
+            self.event_keys = [x for x in self.event_keys if ';AR:' not in x]
         self.psi_response = pd.read_csv(self.data_folder + '/psi_response.csv', index_col=0)
         # copy index to a new column for easier access
         self.psi_response['event_id'] = self.psi_response.index
         self.psi_response['event_type'] = self.psi_response['event_id'].apply(lambda x: 'AR' if ';AR:' in x else 'SE')
+
+        if self.one_tpm_ar: # remove ar events with less than 1 tpm in the cell line
+            self.event_keys = [x for x in self.event_keys if self.psi_response.loc[x, f'{self.cell_type}{self.tpm_level}'] >= np.log10(1+0.1)]
+
         self.all_event_genes = set(self.psi_response['gene_id'].unique())
         # K562 promoter data
         # promoter_df = pd.read_csv('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
@@ -119,6 +128,8 @@ class promoter_enhancer_dataset(Dataset):
                 curr_cell_type = 'GM12878'
         else:
             raise ValueError(f"Cell type {self.cell_type} not supported. Choose 'K562' or 'GM12878'.")
+        
+        cell_tensor = torch.tensor([0, 1, 0]) if curr_cell_type == 'K562' else torch.tensor([1, 0, 0])
         
         if self.include_exons:
             if self.idx_map is not None:
@@ -263,7 +274,7 @@ class promoter_enhancer_dataset(Dataset):
         else:
             assert False, 'Label does not exist!'
         
-        return pe_code_tensor, segment_tensor, rnaFeat_tensor, pe_feat_tensor, expr_tensor, psi_tensor, sample_ensid
+        return pe_code_tensor, segment_tensor, rnaFeat_tensor, pe_feat_tensor, cell_tensor, expr_tensor, psi_tensor, sample_ensid
 
     def get_valid_genes(self):
         if not self.include_exons:
