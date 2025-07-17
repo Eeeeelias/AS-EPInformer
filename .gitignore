@@ -4,3 +4,4 @@ __pycache__
 .ipynb_checkpoints
 *.pyc
 old_models.zip
+*.slurm
