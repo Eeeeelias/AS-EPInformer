@@ -1,5 +1,6 @@
 [FORMAT]
 max-line-length=120
+const-rgx=.*
 
 [MESSAGES CONTROL]
 disable=

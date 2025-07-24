@@ -10,11 +10,11 @@ from torch.utils.data import Dataset
 import h5py
 
 
-class promoter_enhancer_dataset(Dataset):
+class PEHistoneDataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
                  rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False,
-                 set_exon_zero=False, set_pe_zero=False, set_rna_zero=False, set_extra_feat_zero=False, 
+                 set_exon_zero=False, set_pe_zero=False, set_histones_zero=False, set_extra_feat_zero=False, 
                  set_promoter_zero=False, remove_ar=False, one_tpm_ar=False):
         self.expr_type = expr_type
         self.cell_type = cell_type
@@ -35,7 +35,7 @@ class promoter_enhancer_dataset(Dataset):
         # ablation test params
         self.zero_out_exons = set_exon_zero
         self.zero_out_pe_data = set_pe_zero
-        self.zero_out_rna_data = set_rna_zero
+        self.zero_out_histone_data = set_histones_zero
         self.zero_out_feat_data = set_extra_feat_zero
         self.zero_out_promoter = set_promoter_zero
         self.remove_ar = remove_ar
@@ -60,16 +60,11 @@ class promoter_enhancer_dataset(Dataset):
 
         self.all_event_genes = set(self.psi_response['gene_id'].unique())
         # K562 promoter data
-        # promoter_df = pd.read_csv('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
-        promoter_df = pd.read_csv(self.data_folder + '/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
-        # promoter_df['PromoterActivity'] = np.sqrt(promoter_df['H3K27ac.RPM.TSS1Kb']*promoter_df['DHS.RPM.TSS1Kb'])
-        promoter_df['PromoterActivity'] = promoter_df['H3K27ac.RPM.TSS1Kb'] # use H3K27ac as promoter activity
+        promoter_df = pd.read_csv(self.data_folder + 'IHEC-ChIP-Seq-Histone-Signals/Promoter_Combined_K562_Histone_Signals.csv', index_col='gene_id')
         self.promoter_dict['K562'] = promoter_df
         # GM12878 promoter data
-        # self.data_h5 = h5py.File('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/K562_DNase_ENCFF257HEE_2kb_noCutOff_hic_noFlankSeq_150kb60e_AllPutative_signals_False_v2.h5')
-        promoter_df = pd.read_csv(self.data_folder + '/GM12878_DNase_ENCFF020WZB_hic_4DNFI1UEG1HD_1MB_ABC_nominated/DNase_ENCFF020WZB_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
-        promoter_df['PromoterActivity'] = np.sqrt(promoter_df['H3K27ac.RPM.TSS1Kb']*promoter_df['DHS.RPM.TSS1Kb'])
-        self.promoter_dict['GM12878'] = promoter_df 
+        promoter_df = pd.read_csv(self.data_folder + 'IHEC-ChIP-Seq-Histone-Signals/Promoter_Combined_GM12878_Histone_Signals.csv', index_col='gene_id')
+        self.promoter_dict['GM12878'] = promoter_df
 
         self.data_dict['K562'] = h5py.File(self.data_folder + '/K562_DNase_ENCFF257HEE_2kb_4DNFITUOMFUQ_enhancer_promoter_encoding.h5', 'r')
         self.data_dict['GM12878'] = h5py.File(self.data_folder + '/GM12878_DNase_ENCFF020WZB_2kb_4DNFI1UEG1HD_promoter_enhancer_encoding.h5', 'r')
@@ -171,25 +166,21 @@ class promoter_enhancer_dataset(Dataset):
             segment_tensor = torch.stack([self.one_hot_encode(upstream, vocab), self.one_hot_encode(exon, vocab), 
                                         self.one_hot_encode(downstream, vocab)])
         
-        if self.signal_type == 'H3K27ac':
-            promoter_activity = promoter_df.loc[sample_ensid]['PromoterActivity']
-        elif self.signal_type == 'DNase':
-            promoter_activity = promoter_df.loc[sample_ensid]['normalized_dhs']
-        else:
-            promoter_activity = [0]
-            # enhancer_intensity = dhs_intensity
         promoter_code = seq_code[:1]
         enhancers_code = seq_code[1:]
 
-        rnaFeat = list(self.expr_df.loc[sample_ensid][['UTR5LEN_log10zscore','CDSLEN_log10zscore',
-                                                       'INTRONLEN_log10zscore','UTR3LEN_log10zscore','UTR5GC','CDSGC',
-                                                       'UTR3GC', 'ORFEXONDENSITY']].values.astype(float))
         pe_activity = np.concatenate([[0], enhancer_intensity]).flatten()
 
-        if self.usePromoterSignal and self.n_extraFeat > 1:
-            rnaFeat = np.array(rnaFeat + [promoter_activity])
-        else:
-            rnaFeat = np.array(rnaFeat + [0])
+
+        histone_features = self.promoter_dict[curr_cell_type].loc[sample_ensid][['H3K27me3.mean','H3K36me3.mean',
+                                                                                 'H3K4me1.mean','H3K4me3.mean',
+                                                                                 'H3K9me3.mean', 'H3K27ac.mean']]
+        
+        histone_features = [0, 0, 0] + list(histone_features.values.astype(float)) # add two zeros to keep dims
+        
+        if not self.usePromoterSignal or self.n_extraFeat <= 1:
+            histone_features = histone_features[:-1] # remove last feature which is promoter activity
+        histone_features = np.array(histone_features, dtype=np.float32)
 
         if self.distance_threshold is not None:
             enhancer_distance = enhancer_distance.flatten()
@@ -234,17 +225,17 @@ class promoter_enhancer_dataset(Dataset):
             enhancers_code = np.zeros_like(enhancers_code[:self.n_enhancers, :])
         enhancers_code_tensor = torch.from_numpy(enhancers_code[:self.n_enhancers, :]).float()
         pe_code_tensor = torch.concat([promoter_code_tensor, enhancers_code_tensor])
-        rnaFeat_tensor = torch.from_numpy(rnaFeat).float()
+        histone_features_tensor = torch.from_numpy(histone_features).float()
 
         # zero out promoter/enhancer data for ablation study
         if self.zero_out_pe_data:
             pe_code_tensor = torch.zeros_like(pe_code_tensor)
-        if self.zero_out_rna_data:
+        if self.zero_out_histone_data:
             # replace everything but the promoter activity with zeros
             if self.usePromoterSignal and self.n_extraFeat > 1:
-                rnaFeat_tensor[:-1] = 0
+                histone_features_tensor[:-1] = 0
             else:
-                rnaFeat_tensor = torch.zeros_like(rnaFeat_tensor)
+                histone_features_tensor = torch.zeros_like(histone_features_tensor)
         if self.zero_out_feat_data:
             pe_feat_tensor = torch.zeros_like(pe_feat_tensor)
         if self.zero_out_exons:
@@ -271,8 +262,8 @@ class promoter_enhancer_dataset(Dataset):
         
         else:
             assert False, 'Label does not exist!'
-        
-        return pe_code_tensor, segment_tensor, rnaFeat_tensor, pe_feat_tensor, cell_tensor, expr_tensor, psi_tensor, sample_ensid
+
+        return pe_code_tensor, segment_tensor, histone_features_tensor, pe_feat_tensor, cell_tensor, expr_tensor, psi_tensor, sample_ensid
 
     def get_valid_genes(self):
         if not self.include_exons:

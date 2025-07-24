@@ -1,19 +1,14 @@
-import torch
-import os
+import h5py
 import numpy as np
 import pandas as pd
+
 # torch
-import torch.nn as nn
+import torch
 import torch.nn.functional as F
-import torch.optim
-import torch.utils.data as data_utils
-from torch.utils.data import Subset, Dataset
-
-# from model.EPInformer import EPInformer_v2, enhancer_predictor_256bp
-import h5py
+from torch.utils.data import Dataset
 
 
-class promoter_enhancer_dataset(Dataset):
+class PromoterEnhancerDataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
                  rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False,
@@ -292,7 +287,7 @@ class promoter_enhancer_dataset(Dataset):
     def one_hot_encode(self, seq, vocab, length=1024):
         indices = [vocab[item] for item in seq]
         tensor = torch.tensor(indices)
-        one_hot = F.one_hot(tensor, num_classes=len(vocab)).float() # pylint: disable=not-callable
+        one_hot = F.one_hot(tensor, num_classes=len(vocab)).float() # pylint: disable=E1102
         # add padding
         if len(seq) < length:
             one_hot = torch.cat([one_hot, torch.zeros(length - len(seq), 4)], dim=0)

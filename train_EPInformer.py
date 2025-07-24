@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import Subset, Dataset
 import scripts.utils_forTraining as utils
 import scripts.promoter_enhancer_dataset as pe_dataset
+import scripts.pe_histone_dataset as pe_histone_dataset
 
 parser = argparse.ArgumentParser()
 def list_of_strings(arg):
@@ -44,6 +45,7 @@ parser.add_argument('--short_run', action='store_true', help='Run a short versio
 parser.add_argument('--set_exon_zero', action='store_true', help='Set exon data to zero for testing purposes')
 parser.add_argument('--set_pe_zero', action='store_true', help='Set promoter/enhancer data to zero for testing purposes')
 parser.add_argument('--set_rna_zero', action='store_true', help='Set RNA half life data to zero for testing purposes')
+parser.add_argument('--set_histones_zero', action='store_true', help='Set histone data to zero for testing purposes')
 parser.add_argument('--set_extra_feat_zero', action='store_true', help='Set extra features (HiC, Activity, Distance) to zero for testing purposes')
 parser.add_argument('--set_promoter_zero', action='store_true', help='Set promoter data to zero for testing purposes')
 parser.add_argument('--remove_ar_events', action='store_true', help='Remove artificial events from the dataset')
@@ -234,14 +236,14 @@ for fi in fold_list:
     
     # removed pre-set indices for train, valid, test since our data is now event-based, not gene-based
 
-    all_ds = pe_dataset.promoter_enhancer_dataset(data_folder= './data/', expr_type=expr_type, cell_type=cell,
+    all_ds = pe_histone_dataset.PEHistoneDataset(data_folder= './data/', expr_type=expr_type, cell_type=cell,
                                                   n_extraFeat=n_extraFeat, usePromoterSignal=True,
                                                   n_enhancers=n_enhancers, hic_threshold=hic_threshold,
                                                   distance_threshold=distance_threshold, include_exons=args.include_exons,
                                                   rna_seq_source=args.rna_seq_source, tpm=args.tpm_level,
                                                   single_event_train=args.single_events, event_genes=args.event_genes,
                                                   set_exon_zero=args.set_exon_zero, set_pe_zero=args.set_pe_zero,
-                                                  set_rna_zero=args.set_rna_zero, set_extra_feat_zero=args.set_extra_feat_zero,
+                                                  set_histones_zero=args.set_histones_zero, set_extra_feat_zero=args.set_extra_feat_zero,
                                                   set_promoter_zero=args.set_promoter_zero, remove_ar=args.remove_ar_events,
                                                   one_tpm_ar=False)
     # create train, valid, test indices

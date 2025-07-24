@@ -85,7 +85,7 @@ class seq_256bp_encoder_small(nn.Module):
         else:
             x_enhancer = enhancers_input.permute(0, 3, 1, 2).contiguous()  
         x_enhancer = self.stem_conv(x_enhancer)
-        for conv, conv_by_one, pool in self.conv_tower:
+        for conv, conv_by_one, pool in self.conv_tower: # type: ignore
             x_enhancer = conv(x_enhancer)
             x_enhancer = conv_by_one(x_enhancer)
             x_enhancer = pool(x_enhancer)
@@ -395,9 +395,10 @@ class EPInformer_v2(nn.Module):
 
         # concat with RNA data (+ promoter)
         if self.useFeat:
-            # hijack the first three rna_feat with the cell_line info
+            # hijack the first three rna_feat with the cell_line info TODO: change - we can't hijack these anymore
             if cell_line is not None:
-                rna_feat = torch.cat([cell_line, rna_feat[..., 3:]], dim=-1)
+                pass
+                # rna_feat = torch.cat([cell_line, rna_feat[..., 3:]], dim=-1)
                 
             p_embed_expr = torch.cat([p_embed_expr, rna_feat], dim=-1) 
             p_embed_splice = torch.cat([p_embed_splice, rna_feat], dim=-1) 
