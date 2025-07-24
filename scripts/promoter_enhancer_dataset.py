@@ -65,7 +65,8 @@ class promoter_enhancer_dataset(Dataset):
         # K562 promoter data
         # promoter_df = pd.read_csv('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
         promoter_df = pd.read_csv(self.data_folder + '/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
-        promoter_df['PromoterActivity'] = np.sqrt(promoter_df['H3K27ac.RPM.TSS1Kb']*promoter_df['DHS.RPM.TSS1Kb'])
+        # promoter_df['PromoterActivity'] = np.sqrt(promoter_df['H3K27ac.RPM.TSS1Kb']*promoter_df['DHS.RPM.TSS1Kb'])
+        promoter_df['PromoterActivity'] = promoter_df['H3K27ac.RPM.TSS1Kb'] # use H3K27ac as promoter activity
         self.promoter_dict['K562'] = promoter_df
         # GM12878 promoter data
         # self.data_h5 = h5py.File('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/K562_DNase_ENCFF257HEE_2kb_noCutOff_hic_noFlankSeq_150kb60e_AllPutative_signals_False_v2.h5')
