@@ -3,11 +3,8 @@ import os
 import numpy as np
 import pandas as pd
 # torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim
-import torch.utils.data as data_utils
-from torch.utils.data import Subset, Dataset
+from torch.nn.functional import one_hot
+from torch.utils.data import Dataset
 
 # from model.EPInformer import EPInformer_v2, enhancer_predictor_256bp
 import h5py
@@ -292,14 +289,14 @@ class promoter_enhancer_dataset(Dataset):
     def one_hot_encode(self, seq, vocab, length=1024):
         indices = [vocab[item] for item in seq]
         tensor = torch.tensor(indices)
-        one_hot = F.one_hot(tensor, num_classes=len(vocab)).float() # pylint: disable=not-callable
+        one_hot_tensor = one_hot(tensor, num_classes=len(vocab)).float() # pylint: disable=not-callable
         # add padding
         if len(seq) < length:
-            one_hot = torch.cat([one_hot, torch.zeros(length - len(seq), 4)], dim=0)
+            one_hot_tensor = torch.cat([one_hot_tensor, torch.zeros(length - len(seq), 4)], dim=0)
         elif len(seq) > length:
-            one_hot = one_hot[:length]
-        return one_hot
-    
+            one_hot_tensor = one_hot_tensor[:length]
+        return one_hot_tensor
+
     def map_idx_single_genes(self):
         """
         Maps the indices of single genes in the dataset.
