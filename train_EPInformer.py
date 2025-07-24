@@ -2,6 +2,7 @@ import argparse
 from datetime import datetime
 import random
 from collections import defaultdict
+import os
 
 from scipy import stats
 from tqdm import tqdm
@@ -209,17 +210,23 @@ n_enhancers = 60
 today = datetime.now()   # Get date
 
 datetime_str = today.strftime("%Y-%m-%d-%H-%M")
-split_df = pd.read_csv('./data/leave_chrom_out_crossvalidation_split_18377genes.csv', index_col=0)
+day_str = today.strftime("%Y-%m-%d")
+
 if args.short_run:
     saved_model_path = None
 else:
-    saved_model_path = f'./trained_models/{datetime_str}/'
+    if not os.path.exists(f'./trained_models/{day_str}'):
+        os.makedirs(f'./trained_models/{day_str}')
+    saved_model_path = f'./trained_models/{day_str}/{datetime_str}/'
 
 if 'all' in fold_list:
     fold_list = list(range(1, 13))
 
 if args.short_run:
     fold_list = fold_list[:1]  # For testing, only use the first fold
+
+split_df = pd.read_csv('./data/leave_chrom_out_crossvalidation_split_18377genes.csv', index_col=0)
+
 
 for fi in fold_list:
     print("-"*10, 'fold', fi, '-'*10)
