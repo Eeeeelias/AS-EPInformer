@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 # torch
 import torch.nn as nn
-# import torch.nn.functional as F
+import torch.nn.functional as F
 import torch.optim
 import torch.utils.data as data_utils
 from torch.utils.data import Subset, Dataset
@@ -292,7 +292,7 @@ class promoter_enhancer_dataset(Dataset):
     def one_hot_encode(self, seq, vocab, length=1024):
         indices = [vocab[item] for item in seq]
         tensor = torch.tensor(indices)
-        one_hot = torch.nn.functional.one_hot(tensor, num_classes=len(vocab)).float()
+        one_hot = F.one_hot(tensor, num_classes=len(vocab)).float()
         # add padding
         if len(seq) < length:
             one_hot = torch.cat([one_hot, torch.zeros(length - len(seq), 4)], dim=0)
