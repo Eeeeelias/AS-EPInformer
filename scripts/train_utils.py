@@ -178,10 +178,12 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         net.train()
         print('learning rate:', get_lr(optimizer))
         running_loss = 0
+        train_len = len(trainloader)
         expression_loss = 0
         splice_loss = 0
         # print('model training mode is:', net.training)
-        for data in tqdm(trainloader):
+        for data in tqdm(trainloader, bar_format='{desc:<5.5}{percentage:3.0f}%|{bar:10}{r_bar}', desc= f'Epoch {epoch + 1}/{epochs}',
+                         postfix=f"loss: {running_loss/train_len:.3f}"):
             # print(inputs.size())
             optimizer.zero_grad()
             input_pe, input_seg, input_feat, input_dist, input_cell, y_expr, y_psi, _ = data
@@ -343,6 +345,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
 
     return {'mse': mse, 'r2': avg_r2, 'peasonr': peasonr, 'total_loss': loss_e / len(validloader), 
             'expression_loss': expression_loss / len(validloader), 'splice_loss': splice_loss / len(validloader)}
+
 
 def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_size=64, device = 'cuda', 
          model_type='best', normals=None, predict='multi'):
