@@ -13,7 +13,7 @@ cuda: "Use CUDA if available."
 xpu: "Use Intel XPU (experimental)."
 use_pretrained_encoder: "Whether to use a pretrained sequence encoder."
 
-rna_seq_source: "RNA-seq source. Options: xpresso, epiatlas."
+rna_seq_source: "RNA-seq source, always epiatlas when using include_exons. Options: xpresso, epiatlas."
 tpm_level: "TPM level. Options: gene or transcript."
 include_exons: "Include exon-level input features."
 single_events: "Use only one event per gene in training."

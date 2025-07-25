@@ -85,7 +85,7 @@ def get_loss_function(expr_loss_type='mse', splice_loss_type='bce', **kwargs):
 
 
 def combine_losses(loss_expr, loss_splice, predict_type='multi', weights=(1.0, 1.0)) -> torch.Tensor:
-    loss = None
+    loss = torch.tensor(0.0, device=loss_expr.device)
     if predict_type == 'multi':
         if weights[0] == -np.inf: # expression loss should not be used
             loss = loss_splice
@@ -137,7 +137,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         early_stopping = EarlyStoppingMulti(patience=3, verbose=True)
     
     # soft adapt init 
-    soft_adapt = LossWeightedSoftAdapt(beta=0.1)
+    # soft_adapt = LossWeightedSoftAdapt(beta=0.1)
     
     # get all PSI values from training dataset
     if predict == 'multi' and weigh_samples:
@@ -154,6 +154,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     learned_loss = True if loss_class is not None else False
     loss_weights = [0.5, 1.0] # modified by early stopping
 
+    # optimizer
     all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters()) # type: ignore
     optimizer = torch.optim.AdamW(all_params, lr=learning_rate, weight_decay=1e-6)
     net.train()
@@ -166,11 +167,12 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     print('Model name:', net.name)
     lrs = []
+
     # softadapt init stuff
-    update_epochs = 2
-    losses_expr = []
-    losses_splice = []
-    adapt_weights = torch.tensor([1.0, 1.0], device=device)
+    # update_epochs = 2
+    # losses_expr = []
+    # losses_splice = []
+    # adapt_weights = torch.tensor([1.0, 1.0], device=device)
 
     for epoch in range(epochs):
         net.train()
@@ -206,15 +208,12 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             # if epoch % update_epochs == 0 and epoch > 0:
             #     print(losses_expr, losses_splice)
             #     adapt_weights = soft_adapt.get_component_weights(torch.tensor(losses_expr), torch.tensor(losses_splice))
-            #     # if early_stopping.expr_early_stop:
-            #     #    adapt_weights[0] = -np.inf
-            #     # if early_stopping.splice_early_stop:
-            #     #    adapt_weights[1] = -np.inf
+
 
             loss = combine_losses(loss_expr, loss_splice, predict_type=predict, weights=loss_weights)
-            if not os.path.exists("graph.png"):
+            if not os.path.exists("images/graph.png"):
                 print("Creating computation graph for the first time")
-                make_dot(loss, params=dict(net.named_parameters())).render("graph", format="png")
+                make_dot(loss, params=dict(net.named_parameters())).render("images/graph", format="png")
             # propagate the loss backward
             loss.backward()
             # update the gradients
@@ -228,22 +227,21 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
               f"expression loss: {expression_loss/len(trainloader):.5f}, " \
               f"splice loss: {splice_loss/len(trainloader):.5f}")
 
-        val_mse_all, val_r2_all, val_pr_all, val_loss_total, val_loss_expr, val_loss_splice = validate(net, valid_ds, 
-                                                    n_enhancers=n_enhancers, device=device, predict=predict,
-                                                    expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type)
-        
-        val_pr_we, val_r2_we = val_pr_all, val_r2_all
-        print('Validation R square all:', val_r2_all)
-        early_stopping(val_loss_expr, val_loss_splice, net, epoch)
+        val = validate(net, valid_ds, n_enhancers=n_enhancers, device=device, predict=predict, 
+                        expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type)
+
+        print('Validation R square all:', val['r2'])
+        early_stopping(val['expression_loss'], val['splice_loss'], net, epoch)
         if saved_model_path is not None:
             loss_file.write(f"{fold_i},{epoch+1},{running_loss/len(trainloader)},{expression_loss/len(trainloader)}," \
-                            f"{splice_loss/len(trainloader)},{val_mse_all},{val_r2_all},{val_loss_total},{val_loss_expr}," \
-                            f"{val_loss_splice}\n")
+                            f"{splice_loss/len(trainloader)},{val['mse']},{val['r2']},{val['total_loss']}," \
+                            f"{val['expression_loss']},{val['splice_loss']}\n")
+            
             loss_file.flush()
         if model_logger is not None:
             label_type = net.name.split('.')[-1]
-            model_logger.add([fold_i, epoch, running_loss/len(trainloader), val_mse_all, val_pr_all, val_r2_all, 
-                              val_pr_we, val_r2_we, early_stopping.counter, label_type])
+            model_logger.add([fold_i, epoch, running_loss/len(trainloader), val['mse'], val['pearsonr'], val['r2'], 
+                              val['pearsonr'], val['r2'], early_stopping.counter, label_type])
             # model_logger.save("./EPInfomrer_log/{}.crossValid.log".format(net.name.replace('.'+label_type, '')))
         if early_stopping.expr_early_stop and early_stopping.splice_early_stop:
             print("Early stopping")
@@ -257,7 +255,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     return lrs
 
 def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_size=16, device = 'cuda', 
-             predict='multi', loss_weights=(1.0, 1.0, 1.0), expr_loss_type='mse', splice_loss_type='bce'):
+             predict='multi', loss_weights=(1.0, 1.0, 1.0), expr_loss_type='mse', splice_loss_type='bce') -> dict:
     validloader = data_utils.DataLoader(valid_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     net.eval()
     L_expr, L_psi = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type)
@@ -304,7 +302,6 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             actual += labels
             preds_psi += outputs_psi
             actual_psi += labels_psi
-    
 
     min_max_expr = [np.min(preds), np.max(preds)]
     min_max_psi = [np.min(preds_psi), np.max(preds_psi)]
@@ -344,7 +341,8 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     else:
         avg_r2 = r2_value
 
-    return mse, avg_r2, peasonr, loss_e / len(validloader), expression_loss / len(validloader), splice_loss / len(validloader)
+    return {'mse': mse, 'r2': avg_r2, 'peasonr': peasonr, 'total_loss': loss_e / len(validloader), 
+            'expression_loss': expression_loss / len(validloader), 'splice_loss': splice_loss / len(validloader)}
 
 def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_size=64, device = 'cuda', 
          model_type='best', normals=None, predict='multi'):

@@ -12,8 +12,8 @@ from sklearn.metrics import r2_score
 import torch.utils.data as data_utils
 
 from EPInformer.models_multi import EPInformer_v2, enhancer_predictor_256bp
-from scripts.utils import prepare_input
-import scripts.utils_forTraining as train
+from scripts.pe_utils import prepare_input
+import scripts.train_utils as train
 import scripts.promoter_enhancer_dataset as ped
 
 split_df = pd.read_csv('./data/leave_chrom_out_crossvalidation_split_18377genes.csv', index_col=0)
