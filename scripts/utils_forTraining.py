@@ -18,6 +18,10 @@ from scipy import stats
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
+#
+from softadapt import LossWeightedSoftAdapt
+
+
 # logging
 # from model.EPInformer import EPInformer_v2, enhancer_predictor_256bp
 from scripts.EarlyStopping import EarlyStopping, EarlyStoppingMulti
@@ -80,7 +84,7 @@ def get_loss_function(expr_loss_type='mse', splice_loss_type='bce', **kwargs):
     return L_expr, L_splice
 
 
-def combine_losses(loss_expr, loss_splice, predict_type='multi', weights=(1.0, 1.0)):
+def combine_losses(loss_expr, loss_splice, predict_type='multi', weights=(1.0, 1.0)) -> torch.Tensor:
     loss = None
     if predict_type == 'multi':
         if weights[0] == -np.inf: # expression loss should not be used
@@ -96,6 +100,8 @@ def combine_losses(loss_expr, loss_splice, predict_type='multi', weights=(1.0, 1
 
     elif predict_type == 'RNA':
         loss = loss_expr
+    else:
+        raise ValueError(f"Unsupported predict type: {predict_type}")
         
     return loss
 
@@ -130,6 +136,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     else:
         early_stopping = EarlyStoppingMulti(patience=3, verbose=True)
     
+    # soft adapt init 
+    soft_adapt = LossWeightedSoftAdapt(beta=0.1)
     
     # get all PSI values from training dataset
     if predict == 'multi' and weigh_samples:
@@ -144,9 +152,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     reduction = 'mean' if not weigh_samples else 'none'
     L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type, reduction=reduction)
     learned_loss = True if loss_class is not None else False
-    loss_weights = [1.0, 1.0] # modified by early stopping
+    loss_weights = [0.5, 1.0] # modified by early stopping
 
-    all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters())
+    all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters()) # type: ignore
     optimizer = torch.optim.AdamW(all_params, lr=learning_rate, weight_decay=1e-6)
     net.train()
 
@@ -158,7 +166,12 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     print('Model name:', net.name)
     lrs = []
-    # last_loss = None
+    # softadapt init stuff
+    update_epochs = 2
+    losses_expr = []
+    losses_splice = []
+    adapt_weights = torch.tensor([1.0, 1.0], device=device)
+
     for epoch in range(epochs):
         net.train()
         print('learning rate:', get_lr(optimizer))
@@ -187,8 +200,16 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             if weigh_samples:
                 loss_splice = dense_loss(pred_splice, y_psi.reshape(pred_splice.shape), dw, loss_fn=L_splice)
 
-            expression_loss += loss_expr.item()
-            splice_loss += loss_splice.item()
+            # softadapt updates
+            # losses_expr.append(loss_expr)
+            # losses_splice.append(loss_splice)
+            # if epoch % update_epochs == 0 and epoch > 0:
+            #     print(losses_expr, losses_splice)
+            #     adapt_weights = soft_adapt.get_component_weights(torch.tensor(losses_expr), torch.tensor(losses_splice))
+            #     # if early_stopping.expr_early_stop:
+            #     #    adapt_weights[0] = -np.inf
+            #     # if early_stopping.splice_early_stop:
+            #     #    adapt_weights[1] = -np.inf
 
             loss = combine_losses(loss_expr, loss_splice, predict_type=predict, weights=loss_weights)
             if not os.path.exists("graph.png"):
@@ -199,6 +220,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             # update the gradients
             optimizer.step()
             running_loss += loss.item()
+
+            expression_loss += loss_expr.item()
+            splice_loss += loss_splice.item()
 
         print(f"[Epoch {epoch + 1}] overall loss: {running_loss/len(trainloader):.5f}, "
               f"expression loss: {expression_loss/len(trainloader):.5f}, " \

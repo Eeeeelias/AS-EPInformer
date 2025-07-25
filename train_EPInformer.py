@@ -3,6 +3,10 @@ from datetime import datetime
 import random
 from collections import defaultdict
 import os
+import shutil
+import sys
+import yaml
+from types import SimpleNamespace
 
 from scipy import stats
 from tqdm import tqdm
@@ -14,41 +18,23 @@ import scripts.utils_forTraining as utils
 import scripts.promoter_enhancer_dataset as pe_dataset
 import scripts.pe_histone_dataset as pe_histone_dataset
 
-parser = argparse.ArgumentParser()
-def list_of_strings(arg):
-    return arg.split(',')
-parser.add_argument('--cell', type=str, help='cell line (support K562 and GM12878, both for combined)', choices=['K562', 'GM12878', 'both'], default='K562')  
-parser.add_argument("--fold", type=list_of_strings, help="test fold", default='all')
-parser.add_argument("--model_type", type=str, help='EPInformer type', default='EPInformer-PE-Activity', 
-                    choices=['EPInformer-PE', 'EPInformer-PE-Activity', 'EPInformer-PE-Activity-HiC'])  
-parser.add_argument('--distance_threshold', type=int, help='max distance to TSS', default=100_000) 
-parser.add_argument('--hic_threshold', type=int, help='hic loop thresold', default=-1) 
-parser.add_argument('--expr_assay', type=str, help='expression_assay', choices=['CAGE', 'RNA', 'multi', 'splice'])
-parser.add_argument('--batch_size', type=int, help='batch size', default=16)
-parser.add_argument('--n_interact_enc',type=int, help='layers of interaction encoder', default=3)
-parser.add_argument('--epochs',type=int, help='training epochs', default=100)
-parser.add_argument('--cuda', help='use cuda', action='store_true')
-parser.add_argument('--xpu', help='use xpu', action='store_true')
-parser.add_argument('--use_pretrained_encoder', help='use pretrained sequence encoder', action='store_true')
-parser.add_argument('--rna_seq_source', type=str, help='Which RNA-seq source to use', choices=['xpresso', 'epiatlas'], default='xpresso')
-parser.add_argument('--tpm_level', type=str, help='TPM level for RNA-seq', choices=['gene', 'transcript'], default='gene')
-parser.add_argument('--include_exons', help='Include exons in the input data', action='store_true')
-parser.add_argument('--single_events', help='Use single events per gene for training', action='store_true')
-parser.add_argument('--z_score_normalise', help='Apply z-score normalization to the training data', action='store_true')
-parser.add_argument('--event_genes', action='store_true', help='Use only genes that also have events in the training set')
-parser.add_argument('--learn_loss_weights', action='store_true', help='Learn loss weights for the splicing and expression tasks')
-parser.add_argument('--weigh_samples', action='store_true', help='Weigh samples based on their frequency in the training set')
-parser.add_argument('--expr_loss', type=str, default='mse', choices=['mse', 'smoothl1'], help='Loss function for expression task')
-parser.add_argument('--splice_loss', type=str, default='bce', choices=['bce', 'smoothl1'], help='Loss function for splicing task')
-# ablation/debug arguments
-parser.add_argument('--short_run', action='store_true', help='Run a short version for testing purposes')
-parser.add_argument('--set_exon_zero', action='store_true', help='Set exon data to zero for testing purposes')
-parser.add_argument('--set_pe_zero', action='store_true', help='Set promoter/enhancer data to zero for testing purposes')
-parser.add_argument('--set_rna_zero', action='store_true', help='Set RNA half life data to zero for testing purposes')
-parser.add_argument('--set_histones_zero', action='store_true', help='Set histone data to zero for testing purposes')
-parser.add_argument('--set_extra_feat_zero', action='store_true', help='Set extra features (HiC, Activity, Distance) to zero for testing purposes')
-parser.add_argument('--set_promoter_zero', action='store_true', help='Set promoter data to zero for testing purposes')
-parser.add_argument('--remove_ar_events', action='store_true', help='Remove artificial events from the dataset')
+def parse_yaml_config(config_path):
+    with open(config_path, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f)
+
+def str_to_list(value):
+    if isinstance(value, list):
+        return value
+    return value.split(',')
+
+def dict_to_namespace(d):
+    """Recursively converts a dict into a SimpleNamespace."""
+    if isinstance(d, dict):
+        return SimpleNamespace(**{k: dict_to_namespace(v) for k, v in d.items()})
+    elif isinstance(d, list):
+        return [dict_to_namespace(i) for i in d]
+    else:
+        return d
 
 def filter_id_lists(existing_ids, train_ids, valid_ids, test_ids):
     """
@@ -164,48 +150,61 @@ def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float
 
     return train_indices, val_indices, test_indices
 
-# example
-# python train_EPInformer.py --cell K562  --model_type EPInformer-PE-Activity --expr_assay CAGE 
-# --use_pretrained_encoder --batch_size 16
+##### init ######
+parser = argparse.ArgumentParser()
+parser.add_argument('--config_path', type=str, required=True)
+parser.add_argument('--print_config_help', action='store_true', help='Print help info for config keys')
 
-##### parameter ######
 args = parser.parse_args()
+yml_config = parse_yaml_config(args.config_path)
+
+if args.print_config_help:
+    help_path = os.path.join(os.path.dirname(args.config_path), 'config_help.yaml')
+    if os.path.exists(help_path):
+        help_info = parse_yaml_config(help_path)
+        for key, val in help_info.items():
+            print(f"{key}: {val}")
+    else:
+        print("No config_help.yaml found.")
+    sys.exit(0)
+
+config = dict_to_namespace(yml_config)
 
 #### import the right EPinformer model
-if args.expr_assay == 'multi' or args.expr_assay == 'splice' or args.include_exons:
+if config.base.expr_assay == 'multi' or config.base.expr_assay == 'splice' or config.base.include_exons:
     from EPInformer.models_multi import EPInformer_v2, enhancer_predictor_256bp, WeightedLoss
 else:
     from EPInformer.models import EPInformer_v2, enhancer_predictor_256bp, WeightedLoss
 
 
-cell = args.cell
-
-if args.cuda:
+cell = config.base.cell
+if config.hardware.cuda:
     device = 'cuda'
-elif args.xpu:
+elif config.hardware.xpu:
     device = 'xpu'
 else:
     device = 'cpu'
-distance_threshold = args.distance_threshold
-n_epoch = args.epochs
-hic_threshold = args.hic_threshold
+
+distance_threshold = config.base.distance_threshold
+n_epoch = config.train.max_epochs
+hic_threshold = config.base.hic_threshold
 if hic_threshold == -1:
     hic_threshold = None
 
-if args.model_type == 'EPInformer-PE': 
+if config.base.model_type == 'EPInformer-PE': 
     n_extraFeat = 1
-elif args.model_type == 'EPInformer-PE-Activity':
+elif config.base.model_type == 'EPInformer-PE-Activity':
     n_extraFeat = 2
-elif args.model_type == 'EPInformer-PE-Activity-HiC':
+elif config.base.model_type == 'EPInformer-PE-Activity-HiC':
     n_extraFeat = 3
 else:
-    raise ValueError(f"Unsupported model type: {args.model_type}")
+    raise ValueError(f"Unsupported model type: {config.base.model_type}")
 
-use_pretrained = args.use_pretrained_encoder
-fold_list = args.fold 
-n_encoder = args.n_interact_enc
-batch_size = args.batch_size 
-expr_type = args.expr_assay
+use_pretrained = config.hardware.use_pretrained_encoder
+fold_list = str_to_list(config.base.fold)
+n_encoder = config.train.n_interact_enc
+batch_size = config.train.batch_size
+expr_type = config.base.expr_assay
 n_enhancers = 60
 #################
 
@@ -214,17 +213,18 @@ today = datetime.now()   # Get date
 datetime_str = today.strftime("%Y-%m-%d-%H-%M")
 day_str = today.strftime("%Y-%m-%d")
 
-if args.short_run:
+if config.debug.short_run:
     saved_model_path = None
 else:
-    if not os.path.exists(f'./trained_models/{day_str}'):
-        os.makedirs(f'./trained_models/{day_str}')
     saved_model_path = f'./trained_models/{day_str}/{datetime_str}/'
+    if not os.path.exists(saved_model_path):
+        os.makedirs(saved_model_path, exist_ok=True)
+    shutil.copy(args.config_path, os.path.join(saved_model_path, 'config.yaml'))
 
 if 'all' in fold_list:
     fold_list = list(range(1, 13))
 
-if args.short_run:
+if config.debug.short_run:
     fold_list = fold_list[:1]  # For testing, only use the first fold
 
 split_df = pd.read_csv('./data/leave_chrom_out_crossvalidation_split_18377genes.csv', index_col=0)
@@ -235,30 +235,31 @@ for fi in fold_list:
     fold_i = 'fold_' + str(fi)
     
     # removed pre-set indices for train, valid, test since our data is now event-based, not gene-based
+    ablation_tests = {"set_exon_zero": config.debug.set_exon_zero, "set_pe_zero": config.debug.set_pe_zero,
+                      "set_histones_zero": config.debug.set_histones_zero, "set_extra_feat_zero": config.debug.set_extra_feat_zero,
+                      "set_promoter_zero": config.debug.set_promoter_zero, "remove_ar": config.debug.remove_ar_events,
+                      "one_tpm_ar": False}
 
     all_ds = pe_histone_dataset.PEHistoneDataset(data_folder= './data/', expr_type=expr_type, cell_type=cell,
                                                   n_extraFeat=n_extraFeat, usePromoterSignal=True,
                                                   n_enhancers=n_enhancers, hic_threshold=hic_threshold,
-                                                  distance_threshold=distance_threshold, include_exons=args.include_exons,
-                                                  rna_seq_source=args.rna_seq_source, tpm=args.tpm_level,
-                                                  single_event_train=args.single_events, event_genes=args.event_genes,
-                                                  set_exon_zero=args.set_exon_zero, set_pe_zero=args.set_pe_zero,
-                                                  set_histones_zero=args.set_histones_zero, set_extra_feat_zero=args.set_extra_feat_zero,
-                                                  set_promoter_zero=args.set_promoter_zero, remove_ar=args.remove_ar_events,
-                                                  one_tpm_ar=False)
+                                                  distance_threshold=distance_threshold, include_exons=config.optim.include_exons,
+                                                  rna_seq_source=config.optim.rna_seq_source, tpm=config.optim.tpm_level,
+                                                  single_event_train=config.optim.single_events, event_genes=config.optim.event_genes,
+                                                  **ablation_tests)
     # create train, valid, test indices
     #train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1, 
     #                                                    events=True, seed=42+int(fi))
-    if args.include_exons:
+    if config.optim.include_exons:
         train_idx, valid_idx, test_idx = split_multitask_ids(all_ds.event_keys, train_frac=0.8, val_frac=0.1, 
-                                                             test_frac=0.1, seed=42+int(fi), short_run=args.short_run, 
+                                                             test_frac=0.1, seed=42+int(fi), short_run=config.debug.short_run, 
                                                              pre_splits=split_df, fold_i=fold_i, both_cell_lines=(cell == 'both'))
     else:
         train_idx, valid_idx, test_idx = create_set_indices(all_ds, train_ratio=0.8, valid_ratio=0.1,
                                                             events=False, seed=42+int(fi), splits=split_df, fold_i=fold_i)
     
     normals = None
-    if args.z_score_normalise:
+    if config.optim.z_score_normalise:
         normals = all_ds.z_score_normalize(train_idx)
         print("Z-score normalization applied successfully.")
 
@@ -274,24 +275,24 @@ for fi in fold_list:
         print('Loading pretrained model ...', pt_model_name)
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=pretrained_convNet.encoder,
                               n_enhancer=n_enhancers, out_dim=64, n_extraFeat=n_extraFeat, device=device, 
-                              exon_data=args.include_exons, separate_attention=True).to(device)
+                              exon_data=config.optim.include_exons, separate_attention=True).to(device)
     else:
         model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=None, n_enhancer=n_enhancers, 
-                              out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=args.include_exons, 
+                              out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=config.optim.include_exons, 
                               separate_attention=True).to(device)
 
-    if args.learn_loss_weights:
+    if config.optim.learn_loss_weights:
         print("Learning loss weights for the splicing and expression tasks.")
         weighted_loss = WeightedLoss().to(device)
     else:
         weighted_loss = None
 
     model = model.to(device)
-    model.name = model.name.replace('EPInformerV2', args.model_type) + '.' +  cell + '.' + expr_type
+    model.name = model.name.replace('EPInformerV2', config.base.model_type) + '.' +  cell + '.' + expr_type
 
     utils.train(model, train_ds, valid_dataset=valid_ds, epochs=n_epoch, model_name = model.name, fold_i=fi, 
                 batch_size=batch_size, device=device, saved_model_path=saved_model_path, predict=expr_type, 
-                loss_class=weighted_loss, weigh_samples=args.weigh_samples)
-    
+                loss_class=weighted_loss, weigh_samples=config.optim.weigh_samples)
+
     test_df = utils.test(model, test_ds, model_name = model.name, saved_model_path=saved_model_path, fold_i=fi, 
-                         batch_size=batch_size, normals=normals, device=device, predict=args.expr_assay)
+                         batch_size=batch_size, normals=normals, device=device, predict=config.base.expr_assay)

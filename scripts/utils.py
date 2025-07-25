@@ -15,6 +15,7 @@ def df_to_pyranges(df, start_col='start', end_col='end', chr_col='chr', start_sl
     df['End'] = df[end_col] + end_slop
     return(pr.PyRanges(df))
 
+
 class FastaStringExtractor:
     def __init__(self, fasta_file):
         self.fasta = pyfaidx.Fasta(fasta_file)
@@ -38,9 +39,11 @@ class FastaStringExtractor:
 
     def close(self):
         return self.fasta.close()
-    
+
+
 def one_hot_encode(sequence):
     return kipoiseq.transforms.functional.one_hot_dna(sequence).astype(np.float32)
+
 
 def encode_promoter_enhancer_links(gene_enhancer_df, fasta_path = './data/hg38.fa', max_n_enhancer = 60, max_distanceToTSS = 100_000, max_seq_len=2000, add_flanking=False):
     fasta_extractor = FastaStringExtractor(fasta_path)
@@ -146,6 +149,7 @@ def prepare_input(gene_enhancer_table, gene_list, cell, num_features = 3):
     mRNA_promoter_list = np.array(mRNA_promoter_list)
     return PE_code_list, PE_feat_list, mRNA_promoter_list, PE_links_df
 
+
 def encoder_promoter_enhancer_CRISPRi(pe_df, hg19_fasta_path = './data/hg19.fa', verbose=True, HiC_norm=False):
     pe_df = pe_df.sort_values(by='Distance')
     if 'level_0' in pe_df.columns:
@@ -211,6 +215,7 @@ def encoder_promoter_enhancer_CRISPRi(pe_df, hg19_fasta_path = './data/hg19.fa',
     pe_feat = np.concatenate([pe_distance[:,np.newaxis], pe_activity[:,np.newaxis], pe_hic[:,np.newaxis]],axis=-1)
     return pe_code, pe_feat, rna_ts
 
+
 def compute_enhancer_gene_attention(model, pe_df, use_hic=False, device='cpu'):
     if 'level_0' in pe_df.columns:
         pe_df = pe_df.drop(columns='level_0')
@@ -232,6 +237,7 @@ def compute_enhancer_gene_attention(model, pe_df, use_hic=False, device='cpu'):
       all_expr = all_expr.cpu().detach().numpy()[0][0]
     attention_mean = attn_meanLayer[1:]
     return attention_mean, all_expr
+
 
 def predict_enhancer_activity(enhancer_model, chrom, position, window_size=1024, stride=128, device='cuda'):
     hg19_fasta_path = '../hg19.fa'
@@ -265,6 +271,7 @@ def predict_enhancer_activity(enhancer_model, chrom, position, window_size=1024,
 
     info_df = pd.DataFrame(info_list, columns=['chrom', 'start', 'end', 'seq', 'enhancer_mid', 'pred'])
     return info_df
+
 
 def perturb_enhancer(model, pe_df, use_hic=False, device='cpu'):
     pe_df = pe_df.sort_values(by='Distance').reset_index()

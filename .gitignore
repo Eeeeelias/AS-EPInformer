@@ -5,3 +5,4 @@ __pycache__
 *.pyc
 old_models.zip
 *.slurm
+.config.yaml
