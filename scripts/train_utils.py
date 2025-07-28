@@ -136,8 +136,6 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     else:
         early_stopping = EarlyStoppingMulti(patience=3, verbose=True)
     
-    # soft adapt init 
-    # soft_adapt = LossWeightedSoftAdapt(beta=0.1)
     
     # get all PSI values from training dataset
     if predict == 'multi' and weigh_samples:
@@ -152,7 +150,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     reduction = 'mean' if not weigh_samples else 'none'
     L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type, reduction=reduction)
     learned_loss = True if loss_class is not None else False
-    loss_weights = [0.5, 1.0] # modified by early stopping
+    loss_weights = [0.3, 1.0] # modified by early stopping
 
     # optimizer
     all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters()) # type: ignore
@@ -169,21 +167,25 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     lrs = []
 
     # softadapt init stuff
+    # soft_adapt = LossWeightedSoftAdapt(beta=0.1)
     # update_epochs = 2
-    # losses_expr = []
-    # losses_splice = []
+    losses_expr = []
+    losses_splice = []
     # adapt_weights = torch.tensor([1.0, 1.0], device=device)
 
     for epoch in range(epochs):
         net.train()
         print('learning rate:', get_lr(optimizer))
         running_loss = 0
-        train_len = len(trainloader)
         expression_loss = 0
         splice_loss = 0
+        #if epoch % update_epochs == 0 and epoch > 0:
+        #    # save both tensors
+        #    adapt_weights = soft_adapt.get_component_weights(torch.tensor(losses_expr), torch.tensor(losses_splice))  
+        # print(f"Expr Adapt Weight: {adapt_weights[0]:.4f}, Splice Adapt Weight: {adapt_weights[1]:.4f}")
+
         # print('model training mode is:', net.training)
-        for data in tqdm(trainloader, bar_format='{desc:<5.5}{percentage:3.0f}%|{bar:10}{r_bar}', desc= f'Epoch {epoch + 1}/{epochs}',
-                         postfix=f"loss: {running_loss/train_len:.3f}"):
+        for data in tqdm(trainloader, bar_format='{desc:<8}{percentage:3.0f}%|{bar:20}{r_bar}', desc=f'Epoch {epoch + 1}'):
             # print(inputs.size())
             optimizer.zero_grad()
             input_pe, input_seg, input_feat, input_dist, input_cell, y_expr, y_psi, _ = data
@@ -204,14 +206,6 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             if weigh_samples:
                 loss_splice = dense_loss(pred_splice, y_psi.reshape(pred_splice.shape), dw, loss_fn=L_splice)
 
-            # softadapt updates
-            # losses_expr.append(loss_expr)
-            # losses_splice.append(loss_splice)
-            # if epoch % update_epochs == 0 and epoch > 0:
-            #     print(losses_expr, losses_splice)
-            #     adapt_weights = soft_adapt.get_component_weights(torch.tensor(losses_expr), torch.tensor(losses_splice))
-
-
             loss = combine_losses(loss_expr, loss_splice, predict_type=predict, weights=loss_weights)
             if not os.path.exists("images/graph.png"):
                 print("Creating computation graph for the first time")
@@ -228,6 +222,10 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         print(f"[Epoch {epoch + 1}] overall loss: {running_loss/len(trainloader):.5f}, "
               f"expression loss: {expression_loss/len(trainloader):.5f}, " \
               f"splice loss: {splice_loss/len(trainloader):.5f}")
+
+        # softadapt updates
+        losses_expr.append(expression_loss/len(trainloader))
+        losses_splice.append(splice_loss/len(trainloader))
 
         val = validate(net, valid_ds, n_enhancers=n_enhancers, device=device, predict=predict, 
                         expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type)
@@ -254,6 +252,11 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         elif early_stopping.splice_early_stop:
             print("Early stopping on splice loss")
             loss_weights[1] = -np.inf
+    
+    # save losses expr and losses slice
+    torch.save(torch.tensor(losses_expr), f"fold_{fold_i}_losses_expr.pt")
+    torch.save(torch.tensor(losses_splice), f"fold_{fold_i}_losses_splice.pt")
+
     return lrs
 
 def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_size=16, device = 'cuda', 

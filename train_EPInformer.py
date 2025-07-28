@@ -102,9 +102,12 @@ for fi in fold_list:
     fold_i = 'fold_' + str(fi)
     
     # removed pre-set indices for train, valid, test since our data is now event-based, not gene-based
-    ablation_tests = {"set_exon_zero": config.debug.set_exon_zero, "set_pe_zero": config.debug.set_pe_zero,
-                      "set_histones_zero": config.debug.set_histones_zero, "set_extra_feat_zero": config.debug.set_extra_feat_zero,
-                      "set_promoter_zero": config.debug.set_promoter_zero, "remove_ar": config.debug.remove_ar_events,
+    ablation_tests = {"set_exon_zero": config.debug.set_exon_zero, 
+                      "set_pe_zero": config.debug.set_pe_zero,
+                      "set_histones_zero": config.debug.set_histones_zero, 
+                      "set_extra_feat_zero": config.debug.set_extra_feat_zero,
+                      "set_promoter_zero": config.debug.set_promoter_zero, 
+                      "remove_ar": config.debug.remove_ar_events,
                       "one_tpm_ar": False}
 
     all_ds = pe_histone_dataset.PEHistoneDataset(data_folder= './data/', expr_type=expr_type, cell_type=cell,
