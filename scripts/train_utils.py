@@ -150,7 +150,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     reduction = 'mean' if not weigh_samples else 'none'
     L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type, reduction=reduction)
     learned_loss = True if loss_class is not None else False
-    loss_weights = [0.3, 1.0] # modified by early stopping
+    loss_weights = [0.5, 1.0] # modified by early stopping
 
     # optimizer
     all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters()) # type: ignore

@@ -46,8 +46,8 @@ class PEHistoneDataset(Dataset):
 
         self.use_normalized_psi = False
         self.tpm_level = "_summed_tpm" if tpm == 'transcript' else "_gene_level_tpm"
-        self.gene_sequences = h5py.File(self.data_folder + '/event_sequences.h5', 'r')
-        self.event_keys = list(self.gene_sequences.keys())
+        self.gene_sequences = h5py.File(self.data_folder + '/event_encoding.h5', 'r')
+        self.event_keys = [x.decode() for x in self.gene_sequences['event_id'][:]]
         if self.remove_ar:
             self.event_keys = [x for x in self.event_keys if ';AR:' not in x]
         self.psi_response = pd.read_csv(self.data_folder + '/psi_response.csv', index_col=0)
@@ -145,26 +145,10 @@ class PEHistoneDataset(Dataset):
         # added exon & intron sequences
         segment_tensor = torch.Tensor([])
         if self.include_exons:
-            upstream, downstream, exon = None, None, None
-            sequences = self.gene_sequences[event]
-            for key in sequences.keys():
-                if 'upstream' in key:
-                    upstream = sequences[key][()].decode()
-                    upstream = upstream[-1024:]
-                elif 'downstream' in key:
-                    downstream = sequences[key][()].decode()
-                    downstream = downstream[:1024]
-                elif 'exon' in key:
-                    exon = sequences[key][()].decode()
-                    if len(exon) > 1024:
-                        exon_start = exon[:512]
-                        exon_end = exon[-512:]
-                        exon = exon_start + exon_end
-        
-            # one hot encode the sequences
-            vocab = {'A': 0, 'C': 1, 'G': 2, 'T': 3}
-            segment_tensor = torch.stack([self.one_hot_encode(upstream, vocab), self.one_hot_encode(exon, vocab), 
-                                        self.one_hot_encode(downstream, vocab)])
+            # get the idx at which event == self.gene_sequences['event_id'][idx].decode()
+            event_idx = np.where(self.gene_sequences['event_id'][:] == event.encode())[0][0]
+            assert event == self.gene_sequences['event_id'][event_idx].decode(), "Event ID mismatch!"
+            segment_tensor = torch.from_numpy(self.gene_sequences['event_seq'][event_idx])
         
         promoter_code = seq_code[:1]
         enhancers_code = seq_code[1:]
@@ -276,17 +260,6 @@ class PEHistoneDataset(Dataset):
             ensid_list = set([x.decode() for x in self.data_dict[self.cell_type]['ensid'][:]])
         found_gene_ids = set([x for x in gene_ids if x in ensid_list])
         return [x for x in self.event_keys if x.split(";")[0] in found_gene_ids]
-
-    def one_hot_encode(self, seq, vocab, length=1024):
-        indices = [vocab[item] for item in seq]
-        tensor = torch.tensor(indices)
-        one_hot_tensor = one_hot(tensor, num_classes=len(vocab)).float() # pylint: disable=not-callable
-        # add padding
-        if len(seq) < length:
-            one_hot_tensor = torch.cat([one_hot_tensor, torch.zeros(length - len(seq), 4)], dim=0)
-        elif len(seq) > length:
-            one_hot_tensor = one_hot_tensor[:length]
-        return one_hot_tensor
 
     def map_idx_single_genes(self):
         """
