@@ -44,8 +44,9 @@ def create_links(enhancer_df, gene_tss, max_dist):
 
 if __name__ == "__main__":
     cell_lines = ['K562', 'GM12878']
-    cell_line = cell_lines[1]  # Change this to 'GM12878' for the other cell line
+    cell_line = cell_lines[0]  # Change this to 'GM12878' for the other cell line
     max_distance = 100_000
+    # TODO: combine the gene starts since this might result in bugs for other bed files
     if cell_line == 'K562':
         enhancer_bed = '../data/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/EnhancerList.bed'
         gene_starts = '../data/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/Gene-enhancer links/EnhancerPredictions.txt'
@@ -60,4 +61,3 @@ if __name__ == "__main__":
     link_df = create_links(enhancer_df, gene_tss, 100_000)
     
     link_df.to_csv(f'../data/{cell_line}_gene_enhancer_links.csv', index=False)
-    

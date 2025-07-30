@@ -61,22 +61,11 @@ def adjust_histone_info(histone_info):
     return histone_info.set_index('event_id')
 
 
-def create_gene_h5(gene_h5, current_h5):
+def create_gene_h5(gene_h5, current_h5, enhancer_links, enhancer_histone_info):
     # existing keys: ['activity', 'distance', 'ensid', 'hic', 'pe_code']
-    for i in range(len(current_h5['ensid'])):
-        ensid = current_h5['ensid'][i].decode()
-        if ensid in gene_h5['ensid']:
-            print(f"Skipping {ensid} as it already exists in the new file.")
-            continue
-        
-        # Copying data from the current h5 to the new h5
-        gene_h5['ensid'].append(np.array([ensid], dtype='S'))
-        gene_h5['activity'].append(current_h5['activity'][i])
-        gene_h5['distance'].append(current_h5['distance'][i])
-        gene_h5['hic'].append(current_h5['hic'][i])
-        gene_h5['pe_code'].append(current_h5['pe_code'][i])
-
-        # we need new keys for the histone data
+    dt = h5.string_dtype(encoding='utf-8')
+    # TODO: first need to get the sequences for the enhancer regions
+    pass
 
 
 def create_event_h5(event_h5, gene_sequences, histone_info):
@@ -127,20 +116,41 @@ def create_event_h5(event_h5, gene_sequences, histone_info):
 
 if __name__ == "__main__":
     cell_line = 'K562'
+
+    # load all the h5 files
     current_h5 = h5.File(f'../data/{cell_line}_DNase_ENCFF257HEE_2kb_4DNFITUOMFUQ_enhancer_promoter_encoding.h5', 'r')
-    print(current_h5['pe_code'].shape)
-    gene_h5 = h5.File(f'../data/{cell_line}_histone_appended_pe_encoding.h5', 'w')
+    new_gene_h5 = h5.File(f'../data/{cell_line}_histone_appended_pe_encoding.h5', 'w')
     event_h5 = h5.File(f'../data/{cell_line}_event_encoding.h5', 'w')
     gene_sequences = h5.File('../data/event_sequences.h5', 'r')
-    event_histone_info = {'K562': pd.read_csv('../data/IHEC-ChIP-Seq-Histone-Signals/Events_Combined_K562_Histone_Signals.csv'),
-                          'GM12878': pd.read_csv('../data/IHEC-ChIP-Seq-Histone-Signals/Events_Combined_GM12878_Histone_Signals.csv')}
+
+    # load histone info
+    try:
+        event_histone_info = {
+            'K562': pd.read_csv('../data/IHEC-ChIP-Seq-Histone-Signals/Events_Combined_K562_Histone_Signals.csv'),
+            'GM12878': pd.read_csv('../data/IHEC-ChIP-Seq-Histone-Signals/Events_Combined_GM12878_Histone_Signals.csv')
+        }
+        enhancer_histone_info = {
+            'K562': pd.read_csv('../data/IHEC-ChIP-Seq-Histone-Signals/Enhancers_Combined_K562_Histone_Signals.csv'),
+            'GM12878': pd.read_csv('../data/IHEC-ChIP-Seq-Histone-Signals/Enhancers_Combined_GM12878_Histone_Signals.csv')
+        }
+    except FileNotFoundError as exc:
+        raise FileNotFoundError("Histone info files not found. Please run m_read_histone_signals_events.py" \
+                                "and m_read_histone_signals_promoter.py first.") from exc
+
+    # get the gene enhancer links
+    try:
+        enhancer_links = pd.read_csv(f'../data/{cell_line}_gene_enhancer_links.csv')
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Gene enhancer links file for {cell_line} not found." \
+                                 "Please run m_create_gene_enhancer_links.py first.") from exc
 
     event_histone_info = {key: adjust_histone_info(df) for key, df in event_histone_info.items()}
+    enhancer_histone_info = {key: adjust_histone_info(df) for key, df in enhancer_histone_info.items()}
 
-    # create_gene_h5(gene_h5, current_h5)
+    create_gene_h5(new_gene_h5, current_h5, enhancer_links, enhancer_histone_info[cell_line])
     create_event_h5(event_h5, gene_sequences, event_histone_info)
 
     current_h5.close()
-    gene_h5.close()
+    new_gene_h5.close()
     event_h5.close()
     gene_sequences.close()
