@@ -7,6 +7,9 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
+import scripts.promoter_enhancer_dataset as pe_dataset
+import scripts.pe_histone_dataset as pe_histone_dataset
+
 def parse_yaml_config(config_path):
     with open(config_path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
@@ -138,3 +141,31 @@ def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float
         test_indices = test_indices[:100]
 
     return train_indices, val_indices, test_indices
+
+def init_dataset(dataset_class, input_config, ablation_tests=None):
+    dataset_args = {
+        'data_folder': input_config['data_folder'],
+        'expr_type': input_config['expr_type'],
+        'cell_type': input_config['cell_type'],
+        'n_extraFeat': input_config['n_extraFeat'],
+        'usePromoterSignal': input_config['usePromoterSignal'],
+        'n_enhancers': input_config['n_enhancers'],
+        'hic_threshold': input_config['hic_threshold'],
+        'distance_threshold': input_config['distance_threshold'],
+        'include_exons': input_config['include_exons'],
+        'rna_seq_source': input_config['rna_seq_source'],
+        'tpm': input_config['tpm_level'],
+        'single_event_train': input_config['single_events'],
+        'event_genes': input_config['event_genes'],
+    }
+
+    # Merge in ablation tests if any
+    if ablation_tests:
+        dataset_args.update(ablation_tests)
+
+    if dataset_class == 'pe_histone':
+        cls = pe_histone_dataset.PEHistoneDataset
+    else:
+        cls = pe_dataset.PromoterEnhancerDataset
+
+    return cls(**dataset_args)

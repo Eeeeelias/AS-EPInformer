@@ -145,6 +145,7 @@ def create_gene_h5(gene_h5, current_h5, enhancer_links, enhancer_histone_info):
 
     gene_h5.create_dataset('gene_id', data=gene_ids, dtype=dt)
     gene_h5.create_dataset('pe_seqs', data=pe_seqs, dtype='float32')
+    gene_h5.create_dataset('distance', data=current_h5['distance'][:])
     for key, value in histone_tensors.items():
         gene_h5.create_dataset(key, data=value, dtype='float32')
     return gene_h5
@@ -197,12 +198,12 @@ def create_event_h5(event_h5, gene_sequences, histone_info):
 
 
 if __name__ == "__main__":
-    cell_line = 'GM12878'
+    cell_line = 'GM12878'  # or 'K562'
 
     # load all the h5 files
-    current_h5 = h5.File(f'../data/{cell_line}_DNase_ENCFF257HEE_2kb_4DNFITUOMFUQ_enhancer_promoter_encoding.h5', 'r')
+    current_h5 = h5.File(f'../data/{cell_line}_DNase_ENCFF020WZB_2kb_4DNFI1UEG1HD_promoter_enhancer_encoding.h5', 'r')
     new_gene_h5 = h5.File(f'../data/{cell_line}_histone_appended_pe_encoding.h5', 'w')
-    # event_h5 = h5.File(f'../data/{cell_line}_event_encoding.h5', 'w')
+    # event_h5 = h5.File(f'../data/event_encoding.h5', 'w')
     #gene_sequences = h5.File('../data/event_sequences.h5', 'r')
 
     # load histone info

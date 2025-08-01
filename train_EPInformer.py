@@ -110,13 +110,22 @@ for fi in fold_list:
                       "remove_ar": config.debug.remove_ar_events,
                       "one_tpm_ar": False}
 
-    all_ds = pe_histone_dataset.PEHistoneDataset(data_folder= './data/', expr_type=expr_type, cell_type=cell,
-                                                  n_extraFeat=n_extraFeat, usePromoterSignal=True,
-                                                  n_enhancers=n_enhancers, hic_threshold=hic_threshold,
-                                                  distance_threshold=distance_threshold, include_exons=config.optim.include_exons,
-                                                  rna_seq_source=config.optim.rna_seq_source, tpm=config.optim.tpm_level,
-                                                  single_event_train=config.optim.single_events, event_genes=config.optim.event_genes,
-                                                  **ablation_tests)
+    dataset_options = {'data_folder': './data/',
+                        'expr_type': expr_type,
+                        'cell_type': cell,
+                        'n_extraFeat': n_extraFeat,
+                        'usePromoterSignal': True,
+                        'n_enhancers': n_enhancers,
+                        'hic_threshold': hic_threshold,
+                        'distance_threshold': distance_threshold,
+                        'include_exons': config.optim.include_exons,
+                        'rna_seq_source': config.optim.rna_seq_source,
+                        'tpm_level': config.optim.tpm_level,
+                        'single_events': config.optim.single_events,
+                        'event_genes': config.optim.event_genes}
+
+    all_ds = sp.init_dataset(config.base.dataset, dataset_options, ablation_tests)
+
     # create train, valid, test indices
     #train_idx, valid_idx, test_idx = create_set_indices(np.arange(len(all_ds)), train_ratio=0.8, valid_ratio=0.1, 
     #                                                    events=True, seed=42+int(fi))

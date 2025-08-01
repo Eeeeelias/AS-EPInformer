@@ -15,7 +15,7 @@ class PEHistoneDataset(Dataset):
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
                  rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False,
                  set_exon_zero=False, set_pe_zero=False, set_histones_zero=False, set_extra_feat_zero=False, 
-                 set_promoter_zero=False, remove_ar=False, one_tpm_ar=False):
+                 set_promoter_zero=False, remove_ar=False, one_tpm_ar=False, **kwargs):
         self.expr_type = expr_type
         self.cell_type = cell_type
         self.data_folder = data_folder
@@ -66,8 +66,8 @@ class PEHistoneDataset(Dataset):
         promoter_df = pd.read_csv(self.data_folder + 'IHEC-ChIP-Seq-Histone-Signals/Promoter_Combined_GM12878_Histone_Signals.csv', index_col='gene_id')
         self.promoter_dict['GM12878'] = promoter_df
 
-        self.data_dict['K562'] = h5py.File(self.data_folder + '/K562_DNase_ENCFF257HEE_2kb_4DNFITUOMFUQ_enhancer_promoter_encoding.h5', 'r')
-        self.data_dict['GM12878'] = h5py.File(self.data_folder + '/GM12878_DNase_ENCFF020WZB_2kb_4DNFI1UEG1HD_promoter_enhancer_encoding.h5', 'r')
+        self.data_dict['K562'] = h5py.File(self.data_folder + '/K562_histone_appended_pe_encoding.h5', 'r')
+        self.data_dict['GM12878'] = h5py.File(self.data_folder + '/GM12878_histone_appended_pe_encoding.h5', 'r')
 
         self.expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18377_gene_expr_fromXpresso.csv', index_col='ENSID')
         self.present_genes = self.expr_df.index

@@ -3,7 +3,7 @@ import torch
 
 class EarlyStoppingMulti:
     """Early stops the training if validation loss doesn't improve after a given patience."""
-    def __init__(self, patience=3, verbose=False, delta=0, path=None):
+    def __init__(self, expr_patience=2, splice_patience=2, verbose=False, delta=0, path=None):
         """
         Args:
             patience (int): How long to wait after last time validation loss improved.
@@ -15,8 +15,8 @@ class EarlyStoppingMulti:
             path (str): Path for the checkpoint to be saved to.
                             Default: 'checkpoint.pt'
         """
-        self.epxr_patience = patience
-        self.splice_patience = patience
+        self.expr_patience = expr_patience
+        self.splice_patience = splice_patience
         self.verbose = verbose
         self.expr_counter = 0
         self.splice_counter = 0
@@ -41,9 +41,9 @@ class EarlyStoppingMulti:
 
         if expr_score < self.best_expr_score + self.delta and not self.expr_early_stop:
             self.expr_counter += 1
-            print(f"EarlyStopping expr_counter: {self.expr_counter} out of {self.epxr_patience}, " \
+            print(f"EarlyStopping expr_counter: {self.expr_counter} out of {self.expr_patience}, " \
                     f"expr_score: {self.best_expr_score:.4f}, splice_score: {self.best_splice_score:.4f}")
-            if self.expr_counter >= self.epxr_patience:
+            if self.expr_counter >= self.expr_patience:
                 self.expr_early_stop = True
         
         if splice_score < self.best_splice_score + self.delta and not self.splice_early_stop:

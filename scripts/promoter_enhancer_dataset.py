@@ -13,7 +13,7 @@ class PromoterEnhancerDataset(Dataset):
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
                  rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False,
                  set_exon_zero=False, set_pe_zero=False, set_rna_zero=False, set_extra_feat_zero=False, 
-                 set_promoter_zero=False, remove_ar=False, one_tpm_ar=False):
+                 set_promoter_zero=False, remove_ar=False, one_tpm_ar=False, **kwargs):
         self.expr_type = expr_type
         self.cell_type = cell_type
         self.data_folder = data_folder

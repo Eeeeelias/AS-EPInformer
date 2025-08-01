@@ -18,7 +18,6 @@ def filter_enhancers_by_promoter(enhancer_name):
 
 
 def get_gene_info(gene_starts):
-    gene_starts = gene_starts[['chr', 'TargetGene', 'TargetGeneTSS']].copy()
     gene_starts = gene_starts.drop_duplicates().sort_values(by=['TargetGene'])
     return gene_starts
 
@@ -50,13 +49,11 @@ if __name__ == "__main__":
     cell_lines = ['K562', 'GM12878']
     cell_line = cell_lines[1]  # Change this to 'GM12878' for the other cell line
     max_distance = 100_000
-    # TODO: combine the gene starts since this might result in bugs for other bed files
+    gene_starts = '../data/gene_starts.tsv'
     if cell_line == 'K562':
         enhancer_bed = '../data/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/EnhancerList.bed'
-        gene_starts = '../data/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/Gene-enhancer links/EnhancerPredictions.txt'
     else:
         enhancer_bed = '../data/GM12878_DNase_ENCFF020WZB_hic_4DNFI1UEG1HD_1MB_ABC_nominated/DNase_ENCFF020WZB_Neighborhoods/EnhancerList.bed'
-        gene_starts = '../data/GM12878_DNase_ENCFF020WZB_hic_4DNFI1UEG1HD_1MB_ABC_nominated/Gene-enhancer links/EnhancerPredictions.txt'
     
     gene_starts_df = pd.read_csv(gene_starts, sep='\t')
     enhancer_df = pd.read_csv(enhancer_bed, sep='\t', header=None, names=['chrom', 'start', 'end', 'name']) #chr1	11623	12123	intergenic|chr1:11623-12123

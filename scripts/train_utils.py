@@ -106,10 +106,7 @@ def combine_losses(loss_expr, loss_splice, predict_type='multi', weights=(1.0, 1
     return loss
 
 
-def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, 
-          fixed_encoder = False, n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, 
-          device = 'cuda', stratify=None, epochs=100, valid_size=1000, predict='multi', loss_class=None, 
-          weigh_samples=False, expr_loss_type='mse', splice_loss_type='bce'):
+def setup_loss_file(saved_model_path):
     if saved_model_path and not os.path.exists(saved_model_path):
         os.mkdir(saved_model_path)
     if saved_model_path and not os.path.exists(saved_model_path + "/losses.csv"):
@@ -117,6 +114,16 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         loss_file.write("fold,epoch,training_loss,expresssion_loss,splice_loss,validation_mse,validation_r2\n")
     elif saved_model_path:
         loss_file = open(saved_model_path + "/losses.csv", "a", encoding='utf-8')
+    else:
+        loss_file = None
+    return loss_file
+
+def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, 
+          fixed_encoder = False, n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, 
+          device = 'cuda', stratify=None, epochs=100, valid_size=1000, predict='multi', loss_class=None, 
+          weigh_samples=False, expr_loss_type='mse', splice_loss_type='bce'):
+    
+    loss_file = setup_loss_file(saved_model_path)
 
     train_ds = training_dataset
     valid_ds = valid_dataset
@@ -131,11 +138,12 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
     if saved_model_path is not None:
-        early_stopping = EarlyStoppingMulti(patience=2, path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
-                                    verbose=True)
+        early_stopping = EarlyStoppingMulti(expr_patience=1, splice_patience=3,
+                                            path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
+                                            verbose=True)
     else:
-        early_stopping = EarlyStoppingMulti(patience=3, verbose=True)
-    
+        early_stopping = EarlyStoppingMulti(expr_patience=3, splice_patience=3, verbose=True)
+
     
     # get all PSI values from training dataset
     if predict == 'multi' and weigh_samples:
@@ -188,17 +196,17 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         for data in tqdm(trainloader, bar_format='{desc:<8}{percentage:3.0f}%|{bar:20}{r_bar}', desc=f'Epoch {epoch + 1}'):
             # print(inputs.size())
             optimizer.zero_grad()
-            input_pe, input_seg, input_feat, input_dist, input_cell, y_expr, y_psi, _ = data
+            input_pe, input_ex, p_input_hist, input_pe_feat, input_cell, y_expr, y_psi, _ = data
             input_pe = input_pe.float().to(device)
-            input_seg = input_seg.float().to(device)
-            input_feat = input_feat.float().to(device)
-            input_dist = input_dist.float().to(device)
+            input_ex = input_ex.float().to(device)
+            p_input_hist = p_input_hist.float().to(device)
+            input_pe_feat = input_pe_feat.float().to(device)
             input_cell = input_cell.float().to(device)
 
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
 
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
+            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_ex, p_input_hist, input_pe_feat, input_cell)
 
             loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
             loss_splice = L_splice(pred_splice, y_psi.reshape(pred_splice.shape))
@@ -232,7 +240,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
         print('Validation R square all:', val['r2'])
         early_stopping(val['expression_loss'], val['splice_loss'], net, epoch)
-        if saved_model_path is not None:
+        if loss_file is not None:
             loss_file.write(f"{fold_i},{epoch+1},{running_loss/len(trainloader)},{expression_loss/len(trainloader)}," \
                             f"{splice_loss/len(trainloader)},{val['mse']},{val['r2']},{val['total_loss']}," \
                             f"{val['expression_loss']},{val['splice_loss']}\n")
