@@ -14,6 +14,7 @@ class PEHistoneDataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
                  rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False,
+                 include_enhancers=True,
                  set_exon_zero=False, set_pe_zero=False, set_histones_zero=False, set_extra_feat_zero=False, 
                  set_promoter_zero=False, remove_ar=False, one_tpm_ar=False, **kwargs):
         self.expr_type = expr_type
@@ -29,6 +30,7 @@ class PEHistoneDataset(Dataset):
         self.rna_seq_source = rna_seq_source
         self.filter_for_event_genes = event_genes
         self.include_exons = include_exons
+        self.include_enhancers = include_enhancers
         self.one_tpm_ar = one_tpm_ar
         self.promoter_dict = {}
         self.data_dict = {}
@@ -190,7 +192,8 @@ class PEHistoneDataset(Dataset):
         else:
             pe_feat = np.concatenate([pe_distance[:,np.newaxis]],axis=-1)
 
-        pe_feat = np.concatenate([pe_feat, enhancer_histones], axis=-1)
+        if self.include_enhancers:
+            pe_feat = np.concatenate([pe_feat, enhancer_histones], axis=-1)
 
         promoter_code_tensor = torch.from_numpy(promoter_code).float()
         # zero out promoter code if set_promoter_zero is True

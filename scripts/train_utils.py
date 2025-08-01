@@ -19,7 +19,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 #
-from softadapt import LossWeightedSoftAdapt
+#from softadapt import LossWeightedSoftAdapt
 
 
 # logging

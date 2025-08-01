@@ -153,6 +153,7 @@ def init_dataset(dataset_class, input_config, ablation_tests=None):
         'hic_threshold': input_config['hic_threshold'],
         'distance_threshold': input_config['distance_threshold'],
         'include_exons': input_config['include_exons'],
+        'include_enhancers': input_config.get('include_enhancers', True),
         'rna_seq_source': input_config['rna_seq_source'],
         'tpm': input_config['tpm_level'],
         'single_event_train': input_config['single_events'],

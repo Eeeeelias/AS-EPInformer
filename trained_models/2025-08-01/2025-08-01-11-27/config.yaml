@@ -1,0 +1,43 @@
+base:
+  cell: "K562"                          # options: K562, GM12878, both
+  fold: "all"                           # can also be "0,1,2" etc.
+  model_type: "EPInformer-PE-Activity"  # options: EPInformer-PE, EPInformer-PE-Activity, EPInformer-PE-Activity-HiC
+  distance_threshold: 100000
+  hic_threshold: -1
+  expr_assay: "multi"                   # options: CAGE, RNA, multi, splice
+  dataset: "pe_histone"                 # options: pe_normal, pe_histone
+
+train:
+  batch_size: 16
+  n_interact_enc: 4                     # half per task    
+  max_epochs: 100
+
+hardware:
+  cuda: true
+  xpu: false
+  use_pretrained_encoder: false
+
+optim:
+  rna_seq_source: "xpresso"             # options: xpresso, epiatlas
+  tpm_level: "gene"                     # options: gene, transcript
+  include_exons: true      
+  enhancer_histones: true
+  single_events: false
+  z_score_normalise: false
+  event_genes: false
+  learn_loss_weights: false
+  weigh_samples: false
+
+losses:
+  expr_loss: "mse"                      # options: mse, smoothl1
+  splice_loss: "bce"                    # options: bce, smoothl1
+
+debug:
+  short_run: false
+  set_exon_zero: false
+  set_pe_zero: false
+  set_rna_zero: false
+  set_histones_zero: false
+  set_extra_feat_zero: false
+  set_promoter_zero: false
+  remove_ar_events: false

@@ -199,15 +199,18 @@ def create_event_h5(event_h5, gene_sequences, histone_info):
 
 if __name__ == "__main__":
     cell_line = 'K562'
+    create = 'genes'  # 'events' or 'genes'
 
     # load all the h5 files
     if cell_line == 'K562':
         current_h5 = h5.File(f'../data/{cell_line}_DNase_ENCFF257HEE_2kb_4DNFITUOMFUQ_enhancer_promoter_encoding.h5', 'r')
     else:
         current_h5 = h5.File(f'../data/{cell_line}_DNase_ENCFF020WZB_2kb_4DNFI1UEG1HD_promoter_enhancer_encoding.h5', 'r')
-    new_gene_h5 = h5.File(f'../data/{cell_line}_histone_appended_pe_encoding.h5', 'w')
-    # event_h5 = h5.File(f'../data/event_encoding.h5', 'w')
-    #gene_sequences = h5.File('../data/event_sequences.h5', 'r')
+    if create == 'events':
+        event_h5 = h5.File(f'../data/{cell_line}_event_encoding.h5', 'w')
+        gene_sequences = h5.File('../data/event_sequences.h5', 'r')
+    else:
+        new_gene_h5 = h5.File(f'../data/{cell_line}_histone_appended_pe_encoding.h5', 'w')
 
     # load histone info
     try:
@@ -233,10 +236,13 @@ if __name__ == "__main__":
     event_histone_info = {key: adjust_histone_info(df) for key, df in event_histone_info.items()}
     enhancer_histone_info = {key: adjust_histone_info(df, split_segments=False) for key, df in enhancer_histone_info.items()}
 
-    create_gene_h5(new_gene_h5, current_h5, enhancer_links, enhancer_histone_info[cell_line])
-    # create_event_h5(event_h5, gene_sequences, event_histone_info)
+    if create == 'events':
+        create_event_h5(event_h5, gene_sequences, event_histone_info)
+        event_h5.close()
+        gene_sequences.close()
+    else:
+        create_gene_h5(new_gene_h5, current_h5, enhancer_links, enhancer_histone_info[cell_line])
+        new_gene_h5.close()
 
     current_h5.close()
-    new_gene_h5.close()
-    # event_h5.close()
-    #gene_sequences.close()
+    print("H5 files created successfully.")

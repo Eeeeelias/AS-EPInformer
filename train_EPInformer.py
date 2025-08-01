@@ -119,6 +119,7 @@ for fi in fold_list:
                         'hic_threshold': hic_threshold,
                         'distance_threshold': distance_threshold,
                         'include_exons': config.optim.include_exons,
+                        'include_enhancers': config.optim.enhancer_histones,
                         'rna_seq_source': config.optim.rna_seq_source,
                         'tpm_level': config.optim.tpm_level,
                         'single_events': config.optim.single_events,
