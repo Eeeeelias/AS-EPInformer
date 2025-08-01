@@ -152,13 +152,13 @@ for fi in fold_list:
         checkpoint = torch.load(f"./trained_models/pretrained_enhancer_encoder/{fold_i}_best_{pt_model_name}_checkpoint.pt", 
                                 weights_only=False, map_location=device)
         print('Loading pretrained model ...', pt_model_name)
-        model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=pretrained_convNet.encoder,
-                              n_enhancer=n_enhancers, out_dim=64, n_extraFeat=n_extraFeat, device=device, 
-                              exon_data=config.optim.include_exons, separate_attention=True).to(device)
+        encoder = pretrained_convNet.encoder
     else:
-        model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=None, n_enhancer=n_enhancers, 
-                              out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=config.optim.include_exons, 
-                              separate_attention=True).to(device)
+        encoder = None
+
+    model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=encoder, n_enhancer=n_enhancers, 
+                            out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=config.optim.include_exons, 
+                            separate_attention=True, use_histones=config.optim.enhancer_histones).to(device)
 
     if config.optim.learn_loss_weights:
         print("Learning loss weights for the splicing and expression tasks.")

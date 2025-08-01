@@ -47,7 +47,7 @@ class PEHistoneDataset(Dataset):
         self.use_normalized_psi = False
         self.tpm_level = "_summed_tpm" if tpm == 'transcript' else "_gene_level_tpm"
         self.gene_sequences = h5py.File(self.data_folder + '/event_encoding.h5', 'r')
-        self.event_keys = [x.decode() for x in self.gene_sequences['event_id'][:]]
+        self.event_keys = [x.decode() for x in self.gene_sequences['event_id'][:]] # type: ignore
         if self.remove_ar:
             self.event_keys = [x for x in self.event_keys if ';AR:' not in x]
         self.psi_response = pd.read_csv(self.data_folder + '/psi_response.csv', index_col=0)
@@ -84,7 +84,7 @@ class PEHistoneDataset(Dataset):
             self.idx_map = {}
             # use idx map to filter for event genes
             c = 0
-            for i, gene in enumerate(self.data_dict[cell_type]['ensid'][:]):
+            for i, gene in enumerate(self.data_dict[cell_type]['gene_id'][:]):
                 gene_id = gene.decode()
                 if gene_id in self.all_event_genes:
                     self.idx_map[c] = i
@@ -98,7 +98,7 @@ class PEHistoneDataset(Dataset):
         if self.filter_for_event_genes:
             return len(self.all_event_genes)
         
-        return len(self.data_dict[self.cell_type]['ensid'])
+        return len(self.data_dict[self.cell_type]['gene_id'])
 
     def __getitem__(self, idx):
         if self.cell_type == 'K562':
@@ -131,16 +131,21 @@ class PEHistoneDataset(Dataset):
             event = self.valid_events[idx]
             gene_id = event.split(";")[0]
             # find idx where gene_id is in the data_h5
-            idx = np.where(data_h5['ensid'][:] == gene_id.encode())[0][0]
+            idx = np.where(data_h5['gene_id'][:] == gene_id.encode())[0][0]
 
         if self.filter_for_event_genes and self.expr_type != 'multi' and self.expr_type != 'splice':
             idx = self.idx_map[idx]
 
-        sample_ensid = data_h5['ensid'][idx].decode()
-        seq_code = data_h5['pe_code'][idx]
-        enhancer_distance = data_h5['distance'][idx,1:]
-        enhancer_intensity = data_h5['activity'][idx,1:]
-        enhancer_contact = data_h5['hic'][idx,1:]
+        sample_ensid = data_h5['gene_id'][idx].decode()
+        seq_code = data_h5['pe_seqs'][idx]
+        enhancer_distance = data_h5['distance'][idx,1:] # from the old h5, thus 1:
+        enhancer_intensity = data_h5['H3K27ac'][idx,:]
+        enhancer_27me3 = data_h5['H3K27me3'][idx,:]
+        enhancer_36me3 = data_h5['H3K36me3'][idx,:]
+        enhancer_4me1 = data_h5['H3K4me1'][idx,:]
+        enhancer_4me3 = data_h5['H3K4me3'][idx,:]
+        enhancer_9me3 = data_h5['H3K9me3'][idx,:]
+        enhancer_histones = np.stack([enhancer_27me3, enhancer_36me3, enhancer_4me1, enhancer_4me3, enhancer_9me3], axis=-1)
 
         # added exon & intron sequences
         segment_tensor = torch.Tensor([])
@@ -154,17 +159,17 @@ class PEHistoneDataset(Dataset):
         enhancers_code = seq_code[1:]
 
         pe_activity = np.concatenate([[0], enhancer_intensity]).flatten()
+        enhancer_histones = np.vstack([np.zeros((1, enhancer_histones.shape[1])), enhancer_histones])
 
-
-        histone_features = self.promoter_dict[curr_cell_type].loc[sample_ensid][['H3K27me3.mean','H3K36me3.mean',
+        promoter_histones = self.promoter_dict[curr_cell_type].loc[sample_ensid][['H3K27me3.mean','H3K36me3.mean',
                                                                                  'H3K4me1.mean','H3K4me3.mean',
                                                                                  'H3K9me3.mean', 'H3K27ac.mean']]
-        
-        histone_features = [0, 0, 0] + list(histone_features.values.astype(float)) # add two zeros to keep dims
-        
+
+        promoter_histones = [0, 0, 0] + list(promoter_histones.values.astype(float)) # add three zeros to keep dims
+
         if not self.usePromoterSignal or self.n_extraFeat <= 1:
-            histone_features = histone_features[:-1] # remove last feature which is promoter activity
-        histone_features = np.array(histone_features, dtype=np.float32)
+            promoter_histones = promoter_histones[:-1] # remove last feature which is promoter activity
+        promoter_histones = np.array(promoter_histones, dtype=np.float32)
 
         if self.distance_threshold is not None:
             enhancer_distance = enhancer_distance.flatten()
@@ -176,28 +181,16 @@ class PEHistoneDataset(Dataset):
             enhancer_distance_zero[abs(enhancer_distance) < self.distance_threshold] = enhancer_distance[abs(enhancer_distance) < self.distance_threshold]
             enhancer_distance = enhancer_distance_zero
 
-        if self.hic_threshold is not None:
-            enhancer_contact = enhancer_contact.flatten()
-            enhancers_zero = np.zeros_like(enhancers_code)
-            enhancers_zero[enhancer_contact > self.hic_threshold] = enhancers_code[enhancer_contact > self.hic_threshold]
-            enhancers_code = enhancers_zero
-
-            enhancer_contact_zero = np.zeros_like(enhancer_contact)
-            enhancer_contact_zero[enhancers_code[enhancer_contact > self.hic_threshold ]] = enhancer_contact[enhancers_code[enhancer_contact > self.hic_threshold]]
-            enhancer_contact = enhancer_contact_zero
-
-        pe_hic = np.concatenate([[0], enhancer_contact]).flatten()
-        pe_hic = np.log10(1+pe_hic)
         pe_distance = np.concatenate([[0], enhancer_distance/1000]).flatten()
         # print(pe_distance)
         if self.n_extraFeat == 1:
             pe_feat = np.concatenate([pe_distance[:,np.newaxis]],axis=-1)
         elif self.n_extraFeat == 2:
             pe_feat = np.concatenate([pe_distance[:,np.newaxis], pe_activity[:,np.newaxis]],axis=-1)
-        elif self.n_extraFeat == 3:
-            pe_feat = np.concatenate([pe_distance[:,np.newaxis], pe_hic[:,np.newaxis], pe_activity[:,np.newaxis], ],axis=-1)
         else:
             pe_feat = np.concatenate([pe_distance[:,np.newaxis]],axis=-1)
+
+        pe_feat = np.concatenate([pe_feat, enhancer_histones], axis=-1)
 
         promoter_code_tensor = torch.from_numpy(promoter_code).float()
         # zero out promoter code if set_promoter_zero is True
@@ -209,7 +202,7 @@ class PEHistoneDataset(Dataset):
             enhancers_code = np.zeros_like(enhancers_code[:self.n_enhancers, :])
         enhancers_code_tensor = torch.from_numpy(enhancers_code[:self.n_enhancers, :]).float()
         pe_code_tensor = torch.concat([promoter_code_tensor, enhancers_code_tensor])
-        histone_features_tensor = torch.from_numpy(histone_features).float()
+        histone_features_tensor = torch.from_numpy(promoter_histones).float()
 
         # zero out promoter/enhancer data for ablation study
         if self.zero_out_pe_data:
@@ -226,6 +219,7 @@ class PEHistoneDataset(Dataset):
             segment_tensor = torch.zeros_like(segment_tensor)
 
         # print(pe_distance_tensor)
+        ## Retrieve the true values for the expression and psi tensors
         psi_tensor = 0
         normal = "_normal" if self.use_normalized_psi else ""
 
@@ -251,13 +245,13 @@ class PEHistoneDataset(Dataset):
 
     def get_valid_genes(self):
         if not self.include_exons:
-            return [x.decode() for x in self.data_dict[self.cell_type]['ensid'][:]]
+            return [x.decode() for x in self.data_dict[self.cell_type]['gene_id'][:]]
         gene_ids = [x.split(";")[0] for x in self.event_keys]
         print(f"Found {len(gene_ids)} unique genes in the dataset, {len(set(gene_ids))} after removing duplicates.")
         if self.cell_type == 'both':
-            ensid_list = set([x.decode() for x in self.data_dict['K562']['ensid'][:]]) # just use K562 ensids since both cell lines have the same genes
+            ensid_list = set([x.decode() for x in self.data_dict['K562']['gene_id'][:]]) # just use K562 ensids since both cell lines have the same genes
         else:
-            ensid_list = set([x.decode() for x in self.data_dict[self.cell_type]['ensid'][:]])
+            ensid_list = set([x.decode() for x in self.data_dict[self.cell_type]['gene_id'][:]])
         found_gene_ids = set([x for x in gene_ids if x in ensid_list])
         return [x for x in self.event_keys if x.split(";")[0] in found_gene_ids]
 

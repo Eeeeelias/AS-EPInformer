@@ -180,7 +180,7 @@ class MHAttention_encoderLayer_noLN(nn.Module):
 class EPInformer_v2(nn.Module):
     def __init__(self, base_size = 4, n_encoder=3, out_dim=128, head = 4, pre_trained_encoder= None, n_enhancer=50, 
                  device='cuda', useBN=True, usePromoterSignal=True, useFeat=True, n_extraFeat=0, useLN=True, exon_data=False,
-                 separate_attention=False):
+                 separate_attention=False, use_histones=False):
         super(EPInformer_v2, self).__init__()
         self.n_enhancer = n_enhancer
         self.out_dim = out_dim
@@ -194,17 +194,19 @@ class EPInformer_v2(nn.Module):
         self.device = device
         self.use_exon_data = exon_data
         self.separate_attention = separate_attention
+        self.histone_dim = 5 if use_histones else 0
 
         # 1. pre-trained sequence encoder
         if pre_trained_encoder is not None:
             self.seq_encoder = pre_trained_encoder
             self.name = f'EPInformerV2.preTrainedConv.{base_size}base.{out_dim}dim.{n_encoder}Trans.{head}head.{useBN}BN.' \
-                        f'{useLN}LN.{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh.{exon_data}exon.{separate_attention}exonAttn'
+                        f'{useLN}LN.{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh.{exon_data}exon.' \
+                        f'{separate_attention}exonAttn.{use_histones}histones'
         else:
             self.seq_encoder = seq_256bp_encoder(base_size=base_size)
             self.name = f'EPInformerV2.{base_size}base.{out_dim}dim.{n_encoder}Trans.{head}head.{useBN}BN.{useLN}LN.' \
                         f'{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh.{exon_data}exon.' \
-                        f'{separate_attention}exonAttn'
+                        f'{separate_attention}exonAttn.{use_histones}histones'
         
         if self.use_exon_data:
             self.event_encoder = seq_256bp_encoder_small(base_size=base_size)
@@ -311,7 +313,7 @@ class EPInformer_v2(nn.Module):
             # nn.Sigmoid()  
         )
         self.add_pos_conv = nn.Sequential(
-                nn.Conv1d(in_channels = self.out_dim+n_extraFeat, out_channels=self.out_dim, kernel_size=1),
+                nn.Conv1d(in_channels = self.out_dim + n_extraFeat + self.histone_dim, out_channels=self.out_dim, kernel_size=1),
                 nn.ReLU(),
                 nn.Conv1d(in_channels = self.out_dim, out_channels=self.out_dim, kernel_size=1),
                 nn.ReLU(),

@@ -5,6 +5,7 @@ base:
   distance_threshold: 100000
   hic_threshold: -1
   expr_assay: "multi"                   # options: CAGE, RNA, multi, splice
+  dataset: "pe_histone"                 # options: pe_normal, pe_histone
 
 train:
   batch_size: 16
@@ -20,6 +21,7 @@ optim:
   rna_seq_source: "xpresso"             # options: xpresso, epiatlas
   tpm_level: "gene"                     # options: gene, transcript
   include_exons: true      
+  enhancer_histones: true
   single_events: false
   z_score_normalise: false
   event_genes: false
