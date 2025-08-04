@@ -1,6 +1,6 @@
 base:
   cell: "K562"                          # options: K562, GM12878, both
-  fold: "all"                           # can also be "0,1,2" etc.
+  fold: "1"                             # can also be "1,2,3" etc.
   model_type: "EPInformer-PE-Activity"  # options: EPInformer-PE, EPInformer-PE-Activity, EPInformer-PE-Activity-HiC
   distance_threshold: 100000
   hic_threshold: -1

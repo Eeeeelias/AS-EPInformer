@@ -31,6 +31,7 @@ class PEHistoneDataset(Dataset):
         self.filter_for_event_genes = event_genes
         self.include_exons = include_exons
         self.include_enhancers = include_enhancers
+        self.include_exon_enhancers = include_enhancers
         self.one_tpm_ar = one_tpm_ar
         self.promoter_dict = {}
         self.data_dict = {}
@@ -125,7 +126,8 @@ class PEHistoneDataset(Dataset):
             raise ValueError(f"Cell type {self.cell_type} not supported. Choose 'K562' or 'GM12878'.")
         
         cell_tensor = torch.tensor([0, 1, 0]) if curr_cell_type == 'K562' else torch.tensor([1, 0, 0])
-        
+        histone_marks = ['H3K27ac', 'H3K27me3', 'H3K36me3', 'H3K4me1', 'H3K4me3', 'H3K9me3']
+
         if self.include_exons:
             if self.idx_map is not None:
                 gene_id = self.event_keys[idx].split(";")[0]
@@ -141,21 +143,23 @@ class PEHistoneDataset(Dataset):
         sample_ensid = data_h5['gene_id'][idx].decode()
         seq_code = data_h5['pe_seqs'][idx]
         enhancer_distance = data_h5['distance'][idx,1:] # from the old h5, thus 1:
-        enhancer_intensity = data_h5['H3K27ac'][idx,:]
-        enhancer_27me3 = data_h5['H3K27me3'][idx,:]
-        enhancer_36me3 = data_h5['H3K36me3'][idx,:]
-        enhancer_4me1 = data_h5['H3K4me1'][idx,:]
-        enhancer_4me3 = data_h5['H3K4me3'][idx,:]
-        enhancer_9me3 = data_h5['H3K9me3'][idx,:]
-        enhancer_histones = np.stack([enhancer_27me3, enhancer_36me3, enhancer_4me1, enhancer_4me3, enhancer_9me3], axis=-1)
+        enhancer_data = {key: data_h5[key][idx,:] for key in histone_marks}
+        enhancer_intensity = enhancer_data.pop('H3K27ac', None)
+        enhancer_histones = np.stack([x for x in enhancer_data.values()], axis=-1)
 
         # added exon & intron sequences
         segment_tensor = torch.Tensor([])
+        event_hist_tensor = torch.Tensor([])
         if self.include_exons:
             # get the idx at which event == self.gene_sequences['event_id'][idx].decode()
             event_idx = np.where(self.gene_sequences['event_id'][:] == event.encode())[0][0]
             assert event == self.gene_sequences['event_id'][event_idx].decode(), "Event ID mismatch!"
             segment_tensor = torch.from_numpy(self.gene_sequences['event_seq'][event_idx])
+            event_histones = [self.gene_sequences[f"{x}_{self.cell_type}"][event_idx,:] for x in histone_marks]
+            event_hist_tensor = torch.from_numpy(np.stack(event_histones, axis=-1))
+            # add a zero tensor to emulate distance
+            event_hist_tensor = torch.cat([torch.zeros((event_hist_tensor.shape[0], 1)), event_hist_tensor], dim=-1)
+        
         
         promoter_code = seq_code[:1]
         enhancers_code = seq_code[1:]
@@ -194,13 +198,17 @@ class PEHistoneDataset(Dataset):
 
         if self.include_enhancers:
             pe_feat = np.concatenate([pe_feat, enhancer_histones], axis=-1)
+        
+        if self.include_exon_enhancers:
+            pe_feat = np.concatenate([pe_feat, event_hist_tensor], axis=0)
 
         promoter_code_tensor = torch.from_numpy(promoter_code).float()
         # zero out promoter code if set_promoter_zero is True
         if self.zero_out_promoter:
             promoter_code_tensor = torch.zeros_like(promoter_code_tensor)
 
-        pe_feat_tensor = torch.from_numpy(pe_feat[:self.n_enhancers+1])
+        extra_dims = 4 if self.include_exon_enhancers else 1
+        pe_feat_tensor = torch.from_numpy(pe_feat[:self.n_enhancers + extra_dims])
         if self.n_extraFeat == 0: # Use promoter only
             enhancers_code = np.zeros_like(enhancers_code[:self.n_enhancers, :])
         enhancers_code_tensor = torch.from_numpy(enhancers_code[:self.n_enhancers, :]).float()

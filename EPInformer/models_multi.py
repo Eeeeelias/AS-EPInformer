@@ -359,6 +359,9 @@ class EPInformer_v2(nn.Module):
         if self.use_exon_data:
             exon_padding_mask = ~(exon_seq.sum(-1).sum(-1) > 0).bool() # added padding mask for event and combined
             enhancers_padding_mask = torch.concat([enhancers_padding_mask, exon_padding_mask], dim=1)
+            # do not pad the last three sequences (intron, exon, intron) in the exon_seq
+            enhancers_enhanced_padding_mask = enhancers_padding_mask.clone()
+            #enhancers_enhanced_padding_mask[:, -3:] = False
     
         # encoding layer
         pe_embed = self.seq_encoder(pe_seq)
@@ -373,8 +376,9 @@ class EPInformer_v2(nn.Module):
 
         if extraFeat is not None:
             # fill extraFeat with zeros on dim 1 because we have no promoter signal there
-            if self.use_exon_data:
-                extraFeat = F.pad(extraFeat, pad=(0,0,0,3))            
+            if self.use_exon_data and extraFeat.shape[1] != pe_flatten_embed.shape[1]:
+                extraFeat = F.pad(extraFeat, pad=(0,0,0,3))
+
             pe_flatten_embed = self.add_pos_conv(torch.concat([pe_flatten_embed, extraFeat], axis=-1)
                                                  .permute(0,2,1)).permute(0,2,1)
 
@@ -382,14 +386,15 @@ class EPInformer_v2(nn.Module):
         attn_list = []
         # split self.n_encode in half (e.g. if n_encoder=6 then first 3 layers are for enhancers and last 3 layers for event seqs)
         n_encoder_half = self.n_encoder // 2
-        pe_flatten_embed_expr = pe_flatten_embed
-        pe_flatten_embed_splice = pe_flatten_embed
+        pe_flatten_embed_expr = pe_flatten_embed.clone()
+        pe_flatten_embed_splice = pe_flatten_embed.clone()
         for i in range(n_encoder_half):
             pe_flatten_embed_expr, attn = self.attn_encoder[i](pe_flatten_embed_expr, enhancers_padding_mask=enhancers_padding_mask, 
-                                                                            attn_mask=self.attn_mask.to(self.device))
+                                                                attn_mask=self.attn_mask.to(self.device))
             attn_list.append(attn.unsqueeze(0))
-            pe_flatten_embed_splice, attn = self.attn_encoder[self.n_encoder-i-1](pe_flatten_embed_splice, enhancers_padding_mask=enhancers_padding_mask, 
-                                                                                        attn_mask=self.attn_mask.to(self.device))
+            neg_i = self.n_encoder - i - 1
+            pe_flatten_embed_splice, attn = self.attn_encoder[neg_i](pe_flatten_embed_splice, enhancers_padding_mask=enhancers_padding_mask, 
+                                                                    attn_mask=self.attn_mask.to(self.device))
             attn_list.append(attn.unsqueeze(0))
 
         p_embed_expr = torch.flatten(pe_flatten_embed_expr[:,0,:], start_dim=1)
