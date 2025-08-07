@@ -159,7 +159,8 @@ for fi in fold_list:
 
     model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=encoder, n_enhancer=n_enhancers, 
                             out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=config.optim.include_exons, 
-                            separate_attention=True, use_histones=config.optim.enhancer_histones).to(device)
+                            separate_attention=True, use_histones=config.optim.enhancer_histones, 
+                            name_add=config.base.name).to(device)
 
     if config.optim.learn_loss_weights:
         print("Learning loss weights for the splicing and expression tasks.")

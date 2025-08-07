@@ -15,7 +15,7 @@ from torchviz import make_dot
 from denseweight import DenseWeight
 
 from scipy import stats
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error, r2_score, roc_auc_score, f1_score, accuracy_score
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 #
@@ -64,6 +64,23 @@ def get_sample_weights(trainloader, device='cpu', filter_ones=True):
     num_negative = len(psi_binary) - num_positive
     pos_weight = torch.tensor(num_negative / num_positive, dtype=torch.float32, device=device)
     return dw, pos_weight
+
+
+def get_sample_weights_binary(trainloader, device='cpu'):
+    psi_binary = []
+    for data in trainloader:
+        _, _, _, _, _, _, y_psi, _ = data
+        flat_psi = y_psi.flatten().cpu().numpy()
+        mask = (flat_psi <= 0.2) | (flat_psi >= 0.8)
+        psi_masked = flat_psi[mask]
+        psi_binary.extend((psi_masked > 0.5).astype(int))
+    num_positive = np.sum(np.array(psi_binary) == 1)
+    num_negative = len(psi_binary) - num_positive
+    pos_weight = torch.tensor(num_negative / num_positive, dtype=torch.float32, device=device)
+    print(f"Number of positive samples: {num_positive}, Number of negative samples: {num_negative}\n" \
+        f"Positive weight: {pos_weight}")
+
+    return pos_weight
 
 
 def get_loss_function(expr_loss_type='mse', splice_loss_type='bce', **kwargs):
@@ -118,6 +135,25 @@ def setup_loss_file(saved_model_path):
         loss_file = None
     return loss_file
 
+
+def binarize_psi(pred_psi, true_psi):
+    # filter out samples where true_psi is > 0.2 and < 0.8
+    mask = (true_psi <= 0.2) | (true_psi >= 0.8)
+
+    bin_pred = pred_psi[mask]
+    bin_true = true_psi[mask]
+
+    bin_true = (bin_true >= 0.8).long().float()
+
+    # return 0, 0 if it happens that there are no samples left after filtering
+    if len(bin_pred) == 0 or len(bin_true) == 0:
+        print("No samples left after filtering, returning tensors of zeros")
+        return torch.tensor([0.0]), torch.tensor([0.0])
+
+    return bin_pred, bin_true
+
+
+
 def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, 
           fixed_encoder = False, n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, 
           device = 'cuda', stratify=None, epochs=100, valid_size=1000, predict='multi', loss_class=None, 
@@ -157,6 +193,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     # Loss functions
     reduction = 'mean' if not weigh_samples else 'none'
     L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type, reduction=reduction)
+    # BINARY TEST ONLY
+    # pos_weight = get_sample_weights_binary(trainloader=trainloader, device=device)
+    # L_binary = nn.BCEWithLogitsLoss(reduction=reduction)
     learned_loss = True if loss_class is not None else False
     loss_weights = [0.5, 1.0] # modified by early stopping
 
@@ -211,10 +250,14 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
             loss_splice = L_splice(pred_splice, y_psi.reshape(pred_splice.shape))
 
+            # pred_bin, y_bin = binarize_psi(pred_splice_binary, y_psi)
+            # loss_binary = L_binary(pred_bin, y_bin.reshape(pred_bin.shape))
+
             if weigh_samples:
                 loss_splice = dense_loss(pred_splice, y_psi.reshape(pred_splice.shape), dw, loss_fn=L_splice)
 
             loss = combine_losses(loss_expr, loss_splice, predict_type=predict, weights=loss_weights)
+            # loss = loss_binary # BINARY TEST ONLY
             if not os.path.exists("images/graph.png"):
                 print("Creating computation graph for the first time")
                 make_dot(loss, params=dict(net.named_parameters())).render("images/graph", format="png")
@@ -272,6 +315,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     validloader = data_utils.DataLoader(valid_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     net.eval()
     L_expr, L_psi = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type)
+    # L_binary = nn.BCEWithLogitsLoss(reduction='mean')
 
     with torch.no_grad():
         preds = []
@@ -309,6 +353,14 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             loss_splice = L_psi(pred_splice, y_psi.reshape(pred_splice.shape))
             splice_loss += loss_splice.item()
 
+            # BINARY TEST ONLY
+            # pred_bin, y_bin = binarize_psi(pred_splice_binary, y_psi)
+            # loss_binary = L_binary(pred_bin, y_bin.reshape(pred_bin.shape))
+            # splice_loss += loss_binary.item()
+            # loss_e = loss_binary
+            # outputs_psi = list(torch.sigmoid(pred_bin).flatten().cpu().detach().numpy())
+            # labels_psi = list(y_bin.flatten().cpu().detach().numpy())
+
             loss_e += combine_losses(loss_expr, loss_splice, predict_type=predict)
 
             preds += outputs
@@ -338,13 +390,21 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         r2_value_psi = r2_score(actual_psi, preds_psi)
         peasonr_psi, _ = stats.pearsonr(preds_psi, actual_psi)
         mse_psi = mean_squared_error(actual_psi, preds_psi)
+        # BINARY TEST ONLY
+        # calculate accuracy, AUROC, and F1 score
+        # r2_value_psi = 0
+        # peasonr_psi = 0
+        # mse_psi = 0
+        # auroc = roc_auc_score(actual_psi, preds_psi)
+        # f1 = f1_score(actual_psi, (np.array(preds_psi) >= 0.5).astype(int))
+        # accuracy = accuracy_score(actual_psi, (np.array(preds_psi) >= 0.5).astype(int))
     except ValueError:
-        r2_value_psi = 0
-        peasonr_psi = 0
-        mse_psi = 0
+        r2_value_psi, peasonr_psi, mse_psi = 0, 0, 0
+        auroc, f1, accuracy = 0, 0, 0
     print("### Validation ### PSI expression ###")
     print(f'### Min-Max PSI: {min_max_psi[0]:.5f}, {min_max_psi[1]:.5f}')
     print(f"### MSE:, {mse_psi:.5f} R²: {r2_value_psi:.5f} PeasonR: {peasonr_psi:.5f}")
+    # print(f"### AUROC: {auroc:.5f} F1: {f1:.5f} Accuracy: {accuracy:.5f}\n")
 
     # get average r2 
     if predict == 'multi':
@@ -428,6 +488,10 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
 
             outputs_psi = list(torch.sigmoid(pred_splice).flatten().cpu().detach().numpy())
             labels_psi = list(y_psi.flatten().cpu().detach().numpy())
+
+            # BINARY TEST ONLY
+            # outputs_psi = list(torch.sigmoid(pred_splice_binary).flatten().cpu().detach().numpy())
+            # labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
             preds_psi += outputs_psi
             actual_psi += labels_psi

@@ -180,7 +180,7 @@ class MHAttention_encoderLayer_noLN(nn.Module):
 class EPInformer_v2(nn.Module):
     def __init__(self, base_size = 4, n_encoder=3, out_dim=128, head = 4, pre_trained_encoder= None, n_enhancer=50, 
                  device='cuda', useBN=True, usePromoterSignal=True, useFeat=True, n_extraFeat=0, useLN=True, exon_data=False,
-                 separate_attention=False, use_histones=False):
+                 separate_attention=False, use_histones=False, name_add=None):
         super(EPInformer_v2, self).__init__()
         self.n_enhancer = n_enhancer
         self.out_dim = out_dim
@@ -197,15 +197,16 @@ class EPInformer_v2(nn.Module):
         self.histone_dim = 5 if use_histones else 0
 
         # 1. pre-trained sequence encoder
+        test_name = f"-{name_add}" if name_add is not None else ''
         if pre_trained_encoder is not None:
             self.seq_encoder = pre_trained_encoder
-            self.name = f'EPInformerV2.preTrainedConv.{base_size}base.{out_dim}dim.{n_encoder}Trans.{head}head.{useBN}BN.' \
-                        f'{useLN}LN.{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh.{exon_data}exon.' \
-                        f'{separate_attention}exonAttn.{use_histones}histones'
+            self.name = f'EPInformerV2{test_name}.preTrainedConv.{base_size}base.{out_dim}dim.{n_encoder}Trans.' \
+                        f'{head}head.{useBN}BN.{useLN}LN.{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh.' \
+                        f'{exon_data}exon.{separate_attention}exonAttn.{use_histones}histones'
         else:
             self.seq_encoder = seq_256bp_encoder(base_size=base_size)
-            self.name = f'EPInformerV2.{base_size}base.{out_dim}dim.{n_encoder}Trans.{head}head.{useBN}BN.{useLN}LN.' \
-                        f'{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh.{exon_data}exon.' \
+            self.name = f'EPInformerV2{test_name}.{base_size}base.{out_dim}dim.{n_encoder}Trans.{head}head.{useBN}BN.' \
+                        f'{useLN}LN.{useFeat}Feat.{n_extraFeat}extraFeat.{n_enhancer}enh.{exon_data}exon.' \
                         f'{separate_attention}exonAttn.{use_histones}histones'
         
         if self.use_exon_data:
@@ -300,8 +301,9 @@ class EPInformer_v2(nn.Module):
         self.pToSpliceBinary = nn.Sequential(
             nn.Linear(self.out_dim+feat_n, 128),
             nn.ReLU(),
-            nn.Linear(128, 1),
+            nn.Linear(128, 64),
             nn.ReLU(),
+            nn.Linear(64, 1)
         )
 
         self.pToSplice = nn.Sequential(
@@ -394,7 +396,7 @@ class EPInformer_v2(nn.Module):
             attn_list.append(attn.unsqueeze(0))
             neg_i = self.n_encoder - i - 1
             pe_flatten_embed_splice, attn = self.attn_encoder[neg_i](pe_flatten_embed_splice, enhancers_padding_mask=enhancers_padding_mask, 
-                                                                    attn_mask=self.attn_mask.to(self.device))
+                                                                    attn_mask=self.exon_attn_mask.to(self.device))
             attn_list.append(attn.unsqueeze(0))
 
         p_embed_expr = torch.flatten(pe_flatten_embed_expr[:,0,:], start_dim=1)
