@@ -12,7 +12,8 @@ import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import Subset, Dataset
-import scripts.train_utils as utils
+import scripts.train_utils as reg_utils
+import scripts.train_utils_binary as bin_utils
 import scripts.promoter_enhancer_dataset as pe_dataset
 import scripts.pe_histone_dataset as pe_histone_dataset
 import scripts.setup_utils as sp
@@ -66,6 +67,13 @@ elif config.base.model_type == 'EPInformer-PE-Activity-HiC':
     n_extraFeat = 3
 else:
     raise ValueError(f"Unsupported model type: {config.base.model_type}")
+
+if config.base.goal == 'regression':
+    print("Training for regression task.")
+    utils = reg_utils
+else:
+    print("Training for binary classification task.")
+    utils = bin_utils
 
 use_pretrained = config.hardware.use_pretrained_encoder
 fold_list = sp.str_to_list(config.base.fold)
@@ -173,7 +181,8 @@ for fi in fold_list:
 
     utils.train(model, train_ds, valid_dataset=valid_ds, epochs=n_epoch, model_name = model.name, fold_i=fi, 
                 batch_size=batch_size, device=device, saved_model_path=saved_model_path, predict=expr_type, 
-                loss_class=weighted_loss, weigh_samples=config.optim.weigh_samples)
+                loss_class=weighted_loss, weigh_samples=config.optim.weigh_samples, expr_loss_type=config.losses.expr_loss,
+                splice_loss_type=config.losses.splice_loss)
 
     test_df = utils.test(model, test_ds, model_name = model.name, saved_model_path=saved_model_path, fold_i=fi, 
                          batch_size=batch_size, normals=normals, device=device, predict=config.base.expr_assay)

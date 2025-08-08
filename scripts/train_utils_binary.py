@@ -66,6 +66,22 @@ def get_sample_weights(trainloader, device='cpu', filter_ones=True):
     return dw, pos_weight
 
 
+def get_sample_weights_binary(trainloader, device='cpu'):
+    psi_binary = []
+    for data in trainloader:
+        _, _, _, _, _, _, y_psi, _ = data
+        flat_psi = y_psi.flatten().cpu().numpy()
+        mask = (flat_psi <= 0.2) | (flat_psi >= 0.8)
+        psi_masked = flat_psi[mask]
+        psi_binary.extend((psi_masked > 0.5).astype(int))
+    num_positive = np.sum(np.array(psi_binary) == 1)
+    num_negative = len(psi_binary) - num_positive
+    pos_weight = torch.tensor(num_negative / num_positive, dtype=torch.float32, device=device)
+    print(f"Number of positive samples: {num_positive}, Number of negative samples: {num_negative}\n" \
+        f"Positive weight: {pos_weight}")
+
+    return pos_weight
+
 
 def get_loss_function(expr_loss_type='mse', splice_loss_type='bce', **kwargs):
     """Get the loss function based on the specified type."""
@@ -120,6 +136,24 @@ def setup_loss_file(saved_model_path):
     return loss_file
 
 
+def binarize_psi(pred_psi, true_psi):
+    # filter out samples where true_psi is > 0.2 and < 0.8
+    mask = (true_psi <= 0.2) | (true_psi >= 0.8)
+
+    bin_pred = pred_psi[mask]
+    bin_true = true_psi[mask]
+
+    bin_true = (bin_true >= 0.8).long().float()
+
+    # return 0, 0 if it happens that there are no samples left after filtering
+    if len(bin_pred) == 0 or len(bin_true) == 0:
+        print("No samples left after filtering, returning tensors of zeros")
+        return torch.tensor([]), torch.tensor([])
+
+    return bin_pred, bin_true
+
+
+
 def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, 
           fixed_encoder = False, n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, 
           device = 'cuda', stratify=None, epochs=100, valid_size=1000, predict='multi', loss_class=None, 
@@ -140,7 +174,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
     if saved_model_path is not None:
-        early_stopping = EarlyStoppingMulti(expr_patience=1, splice_patience=2,
+        early_stopping = EarlyStoppingMulti(expr_patience=1, splice_patience=5,
                                             path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
                                             verbose=True)
     else:
@@ -159,6 +193,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     # Loss functions
     reduction = 'mean' if not weigh_samples else 'none'
     L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type, reduction=reduction)
+    # BINARY TEST ONLY
+    pos_weight = get_sample_weights_binary(trainloader=trainloader, device=device)
+    L_binary = nn.BCEWithLogitsLoss(reduction=reduction, pos_weight=pos_weight)
     learned_loss = True if loss_class is not None else False
     loss_weights = [0.5, 1.0] # modified by early stopping
 
@@ -208,19 +245,24 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
 
-            pred_expr, _, pred_splice, _ = net(input_pe, input_ex, p_input_hist, input_pe_feat, input_cell)
+            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_ex, p_input_hist, input_pe_feat, input_cell)
 
             loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
             loss_splice = L_splice(pred_splice, y_psi.reshape(pred_splice.shape))
 
+            pred_bin, y_bin = binarize_psi(pred_splice_binary, y_psi)
+            if len(pred_bin) == 0 or len(y_bin) == 0:
+                continue
+            loss_binary = L_binary(pred_bin, y_bin.reshape(pred_bin.shape))
 
             if weigh_samples:
                 loss_splice = dense_loss(pred_splice, y_psi.reshape(pred_splice.shape), dw, loss_fn=L_splice)
 
-            loss = combine_losses(loss_expr, loss_splice, predict_type=predict, weights=loss_weights)
-            if not os.path.exists("images/graph.png"):
+            # loss = combine_losses(loss_expr, loss_splice, predict_type=predict, weights=loss_weights)
+            loss = loss_binary # BINARY TEST ONLY
+            if not os.path.exists("images/binary_graph.png"):
                 print("Creating computation graph for the first time")
-                make_dot(loss, params=dict(net.named_parameters())).render("images/graph", format="png")
+                make_dot(loss, params=dict(net.named_parameters())).render("images/binary_graph", format="png")
             # propagate the loss backward
             loss.backward()
             # update the gradients
@@ -271,6 +313,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
     validloader = data_utils.DataLoader(valid_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     net.eval()
     L_expr, L_psi = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type)
+    L_binary = nn.BCEWithLogitsLoss(reduction='mean')
 
     with torch.no_grad():
         preds = []
@@ -303,12 +346,22 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
             loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
-            expression_loss += loss_expr.item()
+            expression_loss += 0 # CHANGED BECAUSE OF BINARY
             
             loss_splice = L_psi(pred_splice, y_psi.reshape(pred_splice.shape))
-            splice_loss += loss_splice.item()
+            # splice_loss += loss_splice.item()
 
-            loss_e += combine_losses(loss_expr, loss_splice, predict_type=predict)
+            # BINARY TEST ONLY
+            pred_bin, y_bin = binarize_psi(pred_splice_binary, y_psi)
+            if len(pred_bin) == 0 or len(y_bin) == 0:
+                continue
+            loss_binary = L_binary(pred_bin, y_bin.reshape(pred_bin.shape))
+            splice_loss += loss_binary.item()
+            loss_e += loss_binary
+            outputs_psi = list(torch.sigmoid(pred_bin).flatten().cpu().detach().numpy())
+            labels_psi = list(y_bin.flatten().cpu().detach().numpy())
+
+            # loss_e += combine_losses(loss_expr, loss_splice, predict_type=predict)
 
             preds += outputs
             actual += labels
@@ -337,12 +390,20 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         r2_value_psi = r2_score(actual_psi, preds_psi)
         peasonr_psi, _ = stats.pearsonr(preds_psi, actual_psi)
         mse_psi = mean_squared_error(actual_psi, preds_psi)
+        # BINARY TEST ONLY
+        r2_value_psi = 0
+        peasonr_psi = 0
+        mse_psi = 0
+        auroc = roc_auc_score(actual_psi, preds_psi)
+        f1 = f1_score(actual_psi, (np.array(preds_psi) >= 0.5).astype(int))
+        accuracy = accuracy_score(actual_psi, (np.array(preds_psi) >= 0.5).astype(int))
     except ValueError:
         r2_value_psi, peasonr_psi, mse_psi = 0, 0, 0
-
+        auroc, f1, accuracy = 0, 0, 0
     print("### Validation ### PSI expression ###")
-    print(f'### Min-Max PSI: {min_max_psi[0]:.5f}, {min_max_psi[1]:.5f}')
-    print(f"### MSE:, {mse_psi:.5f} R²: {r2_value_psi:.5f} PeasonR: {peasonr_psi:.5f}")
+    #print(f'### Min-Max PSI: {min_max_psi[0]:.5f}, {min_max_psi[1]:.5f}')
+    #print(f"### MSE:, {mse_psi:.5f} R²: {r2_value_psi:.5f} PeasonR: {peasonr_psi:.5f}")
+    print(f"### AUROC: {auroc:.5f} F1: {f1:.5f} Accuracy: {accuracy:.5f}\n")
 
     # get average r2 
     if predict == 'multi':
@@ -425,6 +486,10 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             labels = list(y_expr.flatten().cpu().detach().numpy())
 
             outputs_psi = list(torch.sigmoid(pred_splice).flatten().cpu().detach().numpy())
+            labels_psi = list(y_psi.flatten().cpu().detach().numpy())
+
+            # BINARY TEST ONLY
+            outputs_psi = list(torch.sigmoid(pred_splice_binary).flatten().cpu().detach().numpy())
             labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
             preds_psi += outputs_psi
