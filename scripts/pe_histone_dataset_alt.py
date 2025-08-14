@@ -116,7 +116,7 @@ class PEHistoneDataset(Dataset):
         event_name = self.gene_sequences['event_id'][idx].decode() # get event name
 
         ### BINARY TESTING
-        segment_tensor = sequences
+        segment_tensor = torch.from_numpy(np.array(sequences)).float() # convert to tensor
         # for the second sequence, find at what idx the padding starts
         ex_mask = (segment_tensor[1] == 0).all(dim=1)
         ex_pad_start = ex_mask.nonzero(as_tuple=True)[0][0] if ex_mask.any() else segment_tensor[1].shape[0]

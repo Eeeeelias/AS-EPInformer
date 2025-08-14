@@ -7,7 +7,7 @@ from Bio.Seq import Seq
 import pyBigWig
 
 from m_read_histone_signals_events import file_uuids, get_file_name
-from m_extract_bp_bigwig import extract_bp_histone_signals, resize_seq
+from m_extract_bp_bigwig import resize_seq
 
 
 psi_file = pd.read_csv('../data/transcript_SE_f1.psi', sep='\t')

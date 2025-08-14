@@ -69,7 +69,7 @@ def get_sample_weights(trainloader, device='cpu', filter_ones=True):
 def get_sample_weights_binary(trainloader, device='cpu'):
     psi_binary = []
     for data in trainloader:
-        _, _, _, _, _, _, y_psi, _ = data
+        _, y_psi, _ = data
         flat_psi = y_psi.flatten().cpu().numpy()
         mask = (flat_psi <= 0.2) | (flat_psi >= 0.8)
         psi_masked = flat_psi[mask]
@@ -465,10 +465,9 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
                 pred_splice = torch.tensor(corr_pred_splice, device=device)
                 y_psi = torch.tensor(corr_y_psi, device=device)
 
-            # if position is 0 then it's cell GM12878 else it's K562
-            cell_lines = ['K562'] * len(outputs)
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
-            labels = list(y_expr.flatten().cpu().detach().numpy())
+            labels = list(pred_expr.flatten().cpu().detach().numpy())
+            cell_lines = ['K562'] * len(outputs)
 
             outputs_psi = list(torch.sigmoid(pred_splice).flatten().cpu().detach().numpy())
             labels_psi = list(y_psi.flatten().cpu().detach().numpy())

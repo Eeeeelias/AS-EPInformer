@@ -159,7 +159,8 @@ for fi in fold_list:
                 loss_class=None, weigh_samples=config.optim.weigh_samples, expr_loss_type=config.losses.expr_loss,
                 splice_loss_type=config.losses.splice_loss)
     
-    plot_loss_curve(saved_model_path)
+    if not config.debug.short_run:
+        plot_loss_curve(saved_model_path)
 
     test_df = utils.test(model, test_ds, model_name = model.name, saved_model_path=saved_model_path, fold_i=fi, 
                          batch_size=batch_size, normals=normals, device=device, predict=config.base.expr_assay)
