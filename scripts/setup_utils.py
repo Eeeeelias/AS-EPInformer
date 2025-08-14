@@ -9,6 +9,7 @@ import pandas as pd
 
 import scripts.promoter_enhancer_dataset as pe_dataset
 import scripts.pe_histone_dataset as pe_histone_dataset
+import scripts.pe_histone_dataset_alt as pe_histone_dataset_alt
 
 def parse_yaml_config(config_path):
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -166,6 +167,8 @@ def init_dataset(dataset_class, input_config, ablation_tests=None):
 
     if dataset_class == 'pe_histone':
         cls = pe_histone_dataset.PEHistoneDataset
+    elif dataset_class == 'pe_histone_alt':
+        cls = pe_histone_dataset_alt.PEHistoneDataset
     else:
         cls = pe_dataset.PromoterEnhancerDataset
 

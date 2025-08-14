@@ -14,8 +14,6 @@ import torch
 from torch.utils.data import Subset, Dataset
 import scripts.train_utils as reg_utils
 import scripts.train_utils_binary as bin_utils
-import scripts.promoter_enhancer_dataset as pe_dataset
-import scripts.pe_histone_dataset as pe_histone_dataset
 import scripts.setup_utils as sp
 from EPInformer.models_multi import ASInformer, ASTransformer, ASLSTM
 from scripts.pe_utils import plot_loss_curve
@@ -153,7 +151,7 @@ for fi in fold_list:
     test_ds = Subset(all_ds, test_idx)
 
     # use a different model
-    model = ASLSTM()
+    model = ASInformer()
     model = model.to(device)
 
     utils.train(model, train_ds, valid_dataset=valid_ds, epochs=n_epoch, model_name = model.name, fold_i=fi, 

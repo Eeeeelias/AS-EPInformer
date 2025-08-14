@@ -235,14 +235,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         for data in tqdm(trainloader, bar_format='{desc:<8}{percentage:3.0f}%|{bar:20}{r_bar}', desc=f'Epoch {epoch + 1}'):
             # print(inputs.size())
             optimizer.zero_grad()
-            input_pe, input_ex, p_input_hist, input_pe_feat, input_cell, y_expr, y_psi, _ = data
-            input_pe = input_pe.float().to(device)
+            input_ex, y_psi, _ = data
             input_ex = input_ex.float().to(device)
-            p_input_hist = p_input_hist.float().to(device)
-            input_pe_feat = input_pe_feat.float().to(device)
-            input_cell = input_cell.float().to(device)
 
-            y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
 
             # pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_ex, p_input_hist, input_pe_feat, input_cell)
@@ -328,16 +323,8 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         splice_loss = 0
         for data in validloader:
             # print(inputs.size())
-            input_pe, input_seg, input_feat, input_dist, input_cell, y_expr, y_psi, _ = data
-            input_pe = input_pe.float().to(device)
+            input_seg, y_psi, _ = data
             input_seg = input_seg.float().to(device)
-            input_feat = input_feat.float().to(device)
-            input_cell = input_cell.float().to(device)
-            # input_dist = input_dist.long().to(device)
-            input_dist = input_dist.float().to(device)
-            # print(input_dist.shape, input_dist)
-            # input_PEmask = ~(input_PE.sum(-1).sum(-1) > 0).bool().to(device)
-            y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
             # print(input_P.shape, input_E.shape, input_Emask.shape)
 
@@ -347,7 +334,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
 
             # outputs = list(pred_expr.flatten().cpu().detach().numpy())
             outputs = list(pred_splice_binary.flatten().cpu().detach().numpy()) # TEMP FOR SIMPLE BINARY
-            labels = list(y_expr.flatten().cpu().detach().numpy())
+            labels = list(pred_splice_binary.flatten().cpu().detach().numpy())
 
             #outputs_psi = list(torch.sigmoid(pred_splice).flatten().cpu().detach().numpy())
             #labels_psi = list(y_psi.flatten().cpu().detach().numpy())
@@ -428,13 +415,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
 def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_size=64, device = 'cuda', 
          model_type='best', normals=None, predict='multi'):
     testloader = data_utils.DataLoader(test_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
-    # checkpoint = torch.load(saved_model_path + "/fold_" + str(fold_i) + "_"+model_name+"_checkpoint.pt")
-    # net.load_state_dict(checkpoint['model_state_dict'])
-    # except:
-    # net = nn.DataParallel(net, device_ids=[0,1])
-    # net.load_state_dict(checkpoint['model_state_dict'])
-    # net.load_state_dict(torch.load("./K562_10crx_models/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt"))
-    # print("Load the best model from fold_" + str(fold_i) + "_"+model_type+"_"+model_name+"_checkpoint.pt", )
+
     if saved_model_path is not None:
         checkpoint = torch.load(saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt", 
                                 weights_only=False)
@@ -455,14 +436,8 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
 
         ensid_list = []
         for data in tqdm(testloader):
-            input_pe, input_seg, input_feat, input_dist, input_cell, y_expr, y_psi, eid = data
-            input_pe = input_pe.float().to(device)
+            input_seg, y_psi, eid = data
             input_seg = input_seg.float().to(device)
-            input_feat = input_feat.float().to(device)
-            input_cell = input_cell.float().to(device)
-            # input_dist = input_dist.long().to(device)
-            input_dist = input_dist.float().to(device)
-            y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
             #pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
             pred_splice_binary = net(input_seg)
@@ -490,9 +465,8 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
                 pred_splice = torch.tensor(corr_pred_splice, device=device)
                 y_psi = torch.tensor(corr_y_psi, device=device)
 
-            cell_lines = input_cell[:, 0].cpu().numpy()
             # if position is 0 then it's cell GM12878 else it's K562
-            cell_lines = ['GM12878' if cl == 0 else 'K562' for cl in cell_lines]
+            cell_lines = ['K562'] * len(outputs)
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
 
