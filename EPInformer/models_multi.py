@@ -210,7 +210,7 @@ class EPInformer_v2(nn.Module):
                         f'{separate_attention}exonAttn.{use_histones}histones'
         
         if self.use_exon_data:
-            self.event_encoder = seq_256bp_encoder_small(base_size=base_size)
+            self.event_encoder = seq_256bp_encoder_small(base_size=10)
 
         if useLN: # use layer norm
             self.attn_encoder = get_clones(MHAttention_encoderLayer(d_model=out_dim, nhead=head), self.n_encoder)
@@ -424,6 +424,133 @@ class EPInformer_v2(nn.Module):
             p_splice_regression = None
 
         return p_expr, p_splice_binary_logits, p_splice_regression, torch.cat(attn_list)
+
+
+
+class ASInformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.name = "ASInformer"
+
+        self.event_encoder = seq_256bp_encoder_small(base_size=10)
+
+        self.channel_red = nn.Sequential(
+            nn.Conv2d(128, 64, kernel_size=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 32, kernel_size=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((3, 8))
+        )
+
+        self.pred_head = nn.Sequential(
+            nn.Linear(256*3, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1)
+        )
+
+    def forward(self, x):
+        x = self.event_encoder(x)
+        x = self.channel_red(x)
+        x = torch.flatten(x.permute(0, 2, 1, 3), start_dim=2)
+        x = x.reshape(x.shape[0], 256*3) 
+        x = self.pred_head(x)
+        return x
+
+
+class ASTransformer(nn.Module):
+    def __init__(self, feature_dim=10, d_model=16, nhead=2, num_layers=2, dim_feedforward=32, dropout=0.3):
+        super().__init__()
+        self.name = "ASTransformer"
+        
+        # Project input features to model dimension
+        self.input_proj = nn.Linear(feature_dim, d_model)
+        
+        # Shared Transformer Encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, 
+            nhead=nhead, 
+            dim_feedforward=dim_feedforward, 
+            dropout=dropout,
+            batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # Final classifier
+        self.fc = nn.Linear(d_model, 1)
+    
+    def forward(self, seq):
+        seq1 = seq[:, 0, :]
+        seq2 = seq[:, 1, :]
+
+        # Project features
+        seq1 = self.input_proj(seq1)
+        seq2 = self.input_proj(seq2)
+        
+        # Pass through shared transformer
+        emb1 = self.transformer(seq1)[:, 0, :]  # take CLS-like first token
+        emb2 = self.transformer(seq2)[:, 0, :]
+
+        # Combine embeddings
+        combined = emb1 + emb2  # or torch.cat([...], dim=-1) + linear
+
+        # Output probability
+        return self.fc(combined)
+
+
+class ASLSTM(nn.Module):
+    def __init__(self, hidden_size=2, dropout=0.3):
+        super().__init__()
+        self.name = "ASLSTM"
+        
+        # LSTMs for each sequence
+        self.lstm_intron_exon = nn.LSTM(
+            input_size=10,
+            hidden_size=hidden_size,
+            batch_first=True,
+            bidirectional=False
+        )
+        
+        self.lstm_exon_intron = nn.LSTM(
+            input_size=10,
+            hidden_size=hidden_size,
+            batch_first=True,
+            bidirectional=False
+        )
+        
+        # After concatenation → feature dim = hidden_size * 2
+        self.lstm_merged = nn.LSTM(
+            input_size=hidden_size * 2,
+            hidden_size=hidden_size,
+            batch_first=True,
+            bidirectional=False
+        )
+        
+        self.dropout = nn.Dropout(dropout)
+        
+        self.fc = nn.Linear(hidden_size, 1)
+        
+    def forward(self, seq):
+        # intron_exon, exon_intron: [batch, 240, 10]
+        intron_exon = seq[:, 0, :]
+        exon_intron = seq[:, 1, :]
+        
+        intron_exon_out, _ = self.lstm_intron_exon(intron_exon)  # [batch, 240, hidden]
+        exon_intron_out, _ = self.lstm_exon_intron(exon_intron)  # [batch, 240, hidden]
+        
+        merged = torch.cat([intron_exon_out, exon_intron_out], dim=2)  # concat along features → [batch, 240, hidden*2]
+        
+        merged_out, (h_n, _) = self.lstm_merged(merged)  # merged_out: [batch, 240, hidden]
+        
+        # Keras `return_sequences=False` means take the last time step's hidden state
+        last_hidden = merged_out[:, -1, :]  # [batch, hidden]
+        
+        dropped = self.dropout(last_hidden)
+        
+        out = self.fc(dropped)  # [batch, 1]
+        
+        return out
 
 
 class WeightedLoss(nn.Module):

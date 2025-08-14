@@ -8,6 +8,7 @@ import pyranges as pr
 from tqdm import tqdm
 import os
 import torch
+import matplotlib.pyplot as plt
 
 def df_to_pyranges(df, start_col='start', end_col='end', chr_col='chr', start_slop=0, end_slop=0):
     df['Chromosome'] = df[chr_col]
@@ -319,3 +320,20 @@ def perturb_enhancer(model, pe_df, use_hic=False, device='cpu'):
     pe_df['Attention score'] = attn_meanLayer[1:]/sum(attn_meanLayer[1:])
     pe_df['pred_expr'] = all_expr
     return pe_df
+
+
+def plot_loss_curve(model_dir):
+    csv_file = f"{model_dir}/losses.csv"
+    df = pd.read_csv(csv_file)
+    # contains fold,epoch,training_loss,train_expr_loss,train_splice_loss,val_mse,val_r2,val_loss,val_expr,val_splice
+    # plot simple loss curves for training and validation
+    plt.figure(figsize=(12, 6))
+    plt.plot(df['epoch'], df['training_loss'], label='Training Loss')
+    plt.plot(df['epoch'], df['val_loss'], label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Loss Curves')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(model_dir, 'loss_curve.png'))
+    plt.show()

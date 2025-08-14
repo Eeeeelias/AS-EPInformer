@@ -15,7 +15,7 @@ from torchviz import make_dot
 from denseweight import DenseWeight
 
 from scipy import stats
-from sklearn.metrics import mean_squared_error, r2_score, roc_auc_score, f1_score, accuracy_score
+from sklearn.metrics import matthews_corrcoef, mean_squared_error, r2_score, roc_auc_score, balanced_accuracy_score
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 #
@@ -128,7 +128,7 @@ def setup_loss_file(saved_model_path):
         os.mkdir(saved_model_path)
     if saved_model_path and not os.path.exists(saved_model_path + "/losses.csv"):
         loss_file = open(saved_model_path + "/losses.csv", "w", encoding='utf-8')
-        loss_file.write("fold,epoch,training_loss,expresssion_loss,splice_loss,validation_mse,validation_r2\n")
+        loss_file.write("fold,epoch,training_loss,train_expr_loss,train_splice_loss,val_mse,val_r2,val_loss,val_expr,val_splice\n")
     elif saved_model_path:
         loss_file = open(saved_model_path + "/losses.csv", "a", encoding='utf-8')
     else:
@@ -174,7 +174,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
     if saved_model_path is not None:
-        early_stopping = EarlyStoppingMulti(expr_patience=1, splice_patience=5,
+        early_stopping = EarlyStoppingMulti(expr_patience=1, splice_patience=20,
                                             path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
                                             verbose=True)
     else:
@@ -192,7 +192,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     # Loss functions
     reduction = 'mean' if not weigh_samples else 'none'
-    L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type, reduction=reduction)
+    # L_expr, L_splice = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type, reduction=reduction)
     # BINARY TEST ONLY
     pos_weight = get_sample_weights_binary(trainloader=trainloader, device=device)
     L_binary = nn.BCEWithLogitsLoss(reduction=reduction, pos_weight=pos_weight)
@@ -245,18 +245,19 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
 
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_ex, p_input_hist, input_pe_feat, input_cell)
+            # pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_ex, p_input_hist, input_pe_feat, input_cell)
+            pred_splice_binary = net(input_ex)
 
-            loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
-            loss_splice = L_splice(pred_splice, y_psi.reshape(pred_splice.shape))
+            # loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
+            # loss_splice = L_splice(pred_splice, y_psi.reshape(pred_splice.shape))
 
             pred_bin, y_bin = binarize_psi(pred_splice_binary, y_psi)
             if len(pred_bin) == 0 or len(y_bin) == 0:
                 continue
             loss_binary = L_binary(pred_bin, y_bin.reshape(pred_bin.shape))
 
-            if weigh_samples:
-                loss_splice = dense_loss(pred_splice, y_psi.reshape(pred_splice.shape), dw, loss_fn=L_splice)
+            #if weigh_samples:
+            #    loss_splice = dense_loss(pred_splice, y_psi.reshape(pred_splice.shape), dw, loss_fn=L_splice)
 
             # loss = combine_losses(loss_expr, loss_splice, predict_type=predict, weights=loss_weights)
             loss = loss_binary # BINARY TEST ONLY
@@ -269,8 +270,10 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             optimizer.step()
             running_loss += loss.item()
 
-            expression_loss += loss_expr.item()
-            splice_loss += loss_splice.item()
+            # expression_loss += loss_expr.item()
+            # splice_loss += loss_splice.item()
+            expression_loss += 0 # CHANGED BECAUSE OF BINARY
+            splice_loss += 0 # CHANGED BECAUSE OF BINARY
 
         print(f"[Epoch {epoch + 1}] overall loss: {running_loss/len(trainloader):.5f}, "
               f"expression loss: {expression_loss/len(trainloader):.5f}, " \
@@ -337,18 +340,22 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
             # print(input_P.shape, input_E.shape, input_Emask.shape)
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
 
-            outputs = list(pred_expr.flatten().cpu().detach().numpy())
+            # pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
+            pred_splice_binary = net(input_seg)
+
+
+            # outputs = list(pred_expr.flatten().cpu().detach().numpy())
+            outputs = list(pred_splice_binary.flatten().cpu().detach().numpy()) # TEMP FOR SIMPLE BINARY
             labels = list(y_expr.flatten().cpu().detach().numpy())
 
-            outputs_psi = list(torch.sigmoid(pred_splice).flatten().cpu().detach().numpy())
-            labels_psi = list(y_psi.flatten().cpu().detach().numpy())
+            #outputs_psi = list(torch.sigmoid(pred_splice).flatten().cpu().detach().numpy())
+            #labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
-            loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
+            #loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
             expression_loss += 0 # CHANGED BECAUSE OF BINARY
             
-            loss_splice = L_psi(pred_splice, y_psi.reshape(pred_splice.shape))
+            #loss_splice = L_psi(pred_splice, y_psi.reshape(pred_splice.shape))
             # splice_loss += loss_splice.item()
 
             # BINARY TEST ONLY
@@ -395,15 +402,16 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         peasonr_psi = 0
         mse_psi = 0
         auroc = roc_auc_score(actual_psi, preds_psi)
-        f1 = f1_score(actual_psi, (np.array(preds_psi) >= 0.5).astype(int))
-        accuracy = accuracy_score(actual_psi, (np.array(preds_psi) >= 0.5).astype(int))
-    except ValueError:
+        mcc = matthews_corrcoef(actual_psi, (np.array(preds_psi) >= 0.5).astype(int))
+        bal_acc = balanced_accuracy_score(actual_psi, (np.array(preds_psi) >= 0.5).astype(int))
+    except ValueError as e:
+        print(f"ValueError in PSI validation, setting metrics to 0: {e}")
         r2_value_psi, peasonr_psi, mse_psi = 0, 0, 0
-        auroc, f1, accuracy = 0, 0, 0
+        auroc, mcc, bal_acc = 0, 0, 0
     print("### Validation ### PSI expression ###")
     #print(f'### Min-Max PSI: {min_max_psi[0]:.5f}, {min_max_psi[1]:.5f}')
     #print(f"### MSE:, {mse_psi:.5f} R²: {r2_value_psi:.5f} PeasonR: {peasonr_psi:.5f}")
-    print(f"### AUROC: {auroc:.5f} F1: {f1:.5f} Accuracy: {accuracy:.5f}\n")
+    print(f"### AUROC: {auroc:.5f} MCC: {mcc:.5f} Bal Acc: {bal_acc:.5f}\n")
 
     # get average r2 
     if predict == 'multi':
@@ -456,7 +464,10 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             input_dist = input_dist.float().to(device)
             y_expr = y_expr.float().to(device)
             y_psi = y_psi.float().to(device)
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
+            #pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
+            pred_splice_binary = net(input_seg)
+            pred_expr, pred_splice = pred_splice_binary, pred_splice_binary
+
 
             if normals:
                 uncorr_pred_ep = pred_expr.clone()

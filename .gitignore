@@ -6,3 +6,4 @@ __pycache__
 old_models.zip
 *.slurm
 .config.yaml
+old_data

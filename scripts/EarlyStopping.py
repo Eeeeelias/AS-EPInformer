@@ -39,7 +39,7 @@ class EarlyStoppingMulti:
             self.best_splice_score = splice_score
             self.save_checkpoint(val_loss_expr, val_loss_splice, model, epoch_i)
 
-        if expr_score < self.best_expr_score + self.delta and not self.expr_early_stop:
+        if expr_score <= self.best_expr_score + self.delta and not self.expr_early_stop:
             self.expr_counter += 1
             print(f"EarlyStopping expr_counter: {self.expr_counter} out of {self.expr_patience}, " \
                     f"expr_score: {self.best_expr_score:.4f}, splice_score: {self.best_splice_score:.4f}")
