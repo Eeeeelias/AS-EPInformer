@@ -143,6 +143,52 @@ def split_multitask_ids(ids: list[str], train_frac: float = 0.7, val_frac: float
 
     return train_indices, val_indices, test_indices
 
+
+def split_binary(ids: list[str], train_frac: float = 0.7, val_frac: float = 0.15, test_frac: float = 0.15,  
+  seed: int = 42, short_run=False, split_simple=False) -> tuple[list[str], list[str], list[str]]:
+    assert abs(train_frac + val_frac + test_frac - 1.0) < 1e-6, "Fractions must sum to 1."
+
+    if not split_simple:
+        # Group full IDs by their shared key (0-th element of the split)
+        key_to_indices = defaultdict(list)
+        for idx, id_ in enumerate(ids):
+            key = id_.split(';')[0]
+            key_to_indices[key].append(idx)
+    else:
+        # just have lists of one index ungrouped.
+        print("Splitting ungrouped by gene. Do you know what you are doing?")
+        key_to_indices = defaultdict(list)
+        for idx, id_ in enumerate(ids):
+            key_to_indices[id_].append(idx)
+
+    # Shuffle keys randomly
+    random.seed(seed)
+    all_keys = list(key_to_indices.keys())
+    random.shuffle(all_keys)
+
+    # Compute split cutoffs
+    n = len(all_keys)
+    train_cutoff = int(train_frac * n)
+    val_cutoff = int((train_frac + val_frac) * n)
+
+    train_keys = all_keys[:train_cutoff]
+    val_keys = all_keys[train_cutoff:val_cutoff]
+    test_keys = all_keys[val_cutoff:]
+
+    # Gather indices
+    train_indices = [idx for k in train_keys for idx in key_to_indices[k]]
+    val_indices = [idx for k in val_keys for idx in key_to_indices[k]]
+    test_indices = [idx for k in test_keys for idx in key_to_indices[k]]
+
+    if short_run:
+        # Limit the number of samples for a short run
+        train_indices = train_indices[:2000]
+        val_indices = val_indices[:100]
+        test_indices = test_indices[:100]
+
+    return train_indices, val_indices, test_indices
+
+
 def init_dataset(dataset_class, input_config, ablation_tests=None):
     dataset_args = {
         'data_folder': input_config['data_folder'],

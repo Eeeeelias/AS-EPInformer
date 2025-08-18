@@ -11,12 +11,36 @@ from tqdm import tqdm
 import pandas as pd
 import numpy as np
 import torch
+import torch.utils.data as data_utils
 from torch.utils.data import Subset, Dataset
 import scripts.train_utils as reg_utils
 import scripts.train_utils_binary as bin_utils
 import scripts.setup_utils as sp
 from EPInformer.models_multi import ASInformer, ASTransformer, ASLSTM, ASdCNNsmall
 from scripts.pe_utils import plot_loss_curve
+from sklearn.metrics import matthews_corrcoef, mean_squared_error, r2_score, roc_auc_score, balanced_accuracy_score
+from sklearn.ensemble import RandomForestClassifier
+
+
+
+def filter_psi(X, y):
+    # filter out samples y is >0.2 and < 0.8
+    mask = (y <= 0.2) | (y >= 0.8)
+    y = y[mask]
+    y = np.where(y > 0.5, 0, 1) 
+    return X[mask], y
+
+
+def loader_to_numpy(loader):
+    X_list, y_list = [], []
+    for data in loader:
+        X, y, _ = data   # like your tuple structure
+        X_list.append(X.view(X.size(0), -1).numpy())  # flatten images/features
+        y_list.append(y.numpy())
+    X = np.concatenate(X_list, axis=0)
+    y = np.concatenate(y_list, axis=0)
+    X, y = filter_psi(X,y)
+    return X, y
 
 
 ##### init ######
@@ -151,24 +175,34 @@ for fi in fold_list:
         print("Z-score normalization applied successfully.")
 
     train_ds = Subset(all_ds, train_idx)
+    trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
     valid_ds = Subset(all_ds, valid_idx)
+    valloader = data_utils.DataLoader(valid_ds, batch_size=batch_size, shuffle=False, num_workers=5, pin_memory=True)
     test_ds = Subset(all_ds, test_idx)
+    testloader = data_utils.DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=5, pin_memory=True)
 
     # use a different model
-    model = ASInformer()
-    model = model.to(device)
+    model = RandomForestClassifier(n_estimators=1000, random_state=42)
 
     # print number of parameters of the model
-    num_params = sum(p.numel() for p in model.parameters())
-    print(f"Number of parameters in {model.name}: {num_params}")
+    # RandomForestClassifier does not have parameters in the same way as PyTorch models
+    print(f"Number of trees in the forest: {model.n_estimators}")
 
-    utils.train(model, train_ds, valid_dataset=valid_ds, epochs=n_epoch, model_name = model.name, fold_i=fi, 
-                batch_size=batch_size, device=device, saved_model_path=saved_model_path, predict=expr_type, 
-                loss_class=None, weigh_samples=config.optim.weigh_samples, expr_loss_type=config.losses.expr_loss,
-                splice_loss_type=config.losses.splice_loss)
-    
-    if not config.debug.short_run:
-        plot_loss_curve(saved_model_path)
+    X_train, y_train = loader_to_numpy(trainloader)
+    X_val, y_val     = loader_to_numpy(valloader)
+    X_test, y_test   = loader_to_numpy(testloader)
 
-    test_df = utils.test(model, test_ds, model_name = model.name, saved_model_path=saved_model_path, fold_i=fi, 
-                         batch_size=batch_size, normals=normals, device=device, predict=config.base.expr_assay)
+    model.fit(X_train, y_train)
+
+    val_preds = model.predict(X_val)
+    val_acc = balanced_accuracy_score(y_val, val_preds)
+    print(f"Validation accuracy: {val_acc:.4f}")
+
+    # test
+    test_preds = model.predict(X_test)
+    test_acc = balanced_accuracy_score(y_test, test_preds)
+    test_mcc = matthews_corrcoef(y_test, test_preds)
+    test_auroc = roc_auc_score(y_test, test_preds)
+    print(f"Test accuracy: {test_acc:.4f}")
+    print(f"Test MCC: {test_mcc:.4f}")
+    print(f"Test AUROC: {test_auroc:.4f}")

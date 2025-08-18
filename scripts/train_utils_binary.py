@@ -174,7 +174,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
     if saved_model_path is not None:
-        early_stopping = EarlyStoppingMulti(expr_patience=1, splice_patience=20,
+        early_stopping = EarlyStoppingMulti(expr_patience=1, splice_patience=5,
                                             path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
                                             verbose=True)
     else:
@@ -330,7 +330,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
 
             # pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
             pred_splice_binary = net(input_seg)
-
+            
 
             # outputs = list(pred_expr.flatten().cpu().detach().numpy())
             outputs = list(pred_splice_binary.flatten().cpu().detach().numpy()) # TEMP FOR SIMPLE BINARY
@@ -352,7 +352,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             loss_binary = L_binary(pred_bin, y_bin.reshape(pred_bin.shape))
             splice_loss += loss_binary.item()
             loss_e += loss_binary
-            outputs_psi = list(torch.sigmoid(pred_bin).flatten().cpu().detach().numpy())
+            outputs_psi = list(torch.sigmoid(pred_bin).flatten().cpu().detach().numpy()) # sigmoid here
             labels_psi = list(y_bin.flatten().cpu().detach().numpy())
 
             # loss_e += combine_losses(loss_expr, loss_splice, predict_type=predict)
@@ -473,7 +473,7 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
             labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
             # BINARY TEST ONLY
-            outputs_psi = list(torch.sigmoid(pred_splice_binary).flatten().cpu().detach().numpy())
+            outputs_psi = list(torch.sigmoid(pred_splice_binary).flatten().cpu().detach().numpy()) # sigmoid here
             labels_psi = list(y_psi.flatten().cpu().detach().numpy())
 
             preds_psi += outputs_psi

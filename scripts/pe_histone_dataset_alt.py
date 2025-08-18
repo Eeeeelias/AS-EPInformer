@@ -52,19 +52,36 @@ class PEHistoneDataset(Dataset):
 
         self.use_normalized_psi = False
         self.tpm_level = "_summed_tpm" if tpm == 'transcript' else "_gene_level_tpm"
-        self.gene_sequences = h5py.File(self.data_folder + f'/extended_events_{self.cell_type}.h5', 'r')
-        self.event_keys = [x.decode() for x in self.gene_sequences['event_id'][:]] # type: ignore
+        self.gene_sequences = {}
+        self.psi_response = {}
+
+        if self.cell_type == 'both':
+            self.gene_sequences['K562'] = h5py.File(self.data_folder + '/extended_events_K562.h5', 'r')
+            self.gene_sequences['GM12878'] = h5py.File(self.data_folder + '/extended_events_GM12878.h5', 'r')
+            self.event_keys = ([x.decode() for x in self.gene_sequences['K562']['event_id'][:]] + #type: ignore
+                                [x.decode() for x in self.gene_sequences['GM12878']['event_id'][:]]) # type: ignore
+
+            self.psi_response['K562'] = pd.read_csv(self.data_folder + '/extended_psi_response_K562.csv', index_col=0)
+            self.psi_response['GM12878'] = pd.read_csv(self.data_folder + '/extended_psi_response_GM12878.csv', index_col=0)
+        else:
+
+            self.gene_sequences[self.cell_type] = h5py.File(self.data_folder + f'/extended_events_{self.cell_type}.h5', 'r')
+            self.event_keys = [x.decode() for x in self.gene_sequences[self.cell_type]['event_id'][:]] # type: ignore
+
+            self.psi_response[self.cell_type] = pd.read_csv(self.data_folder + f'/extended_psi_response_{self.cell_type}.csv', index_col=0)
+
+        # copy index to a new column for easier access
+        for ct in self.psi_response.keys():
+            self.psi_response[ct]['event_id'] = self.psi_response[ct].index
+            self.psi_response[ct]['event_type'] = "SE"
+        
         if self.remove_ar:
             self.event_keys = [x for x in self.event_keys if ';AR:' not in x]
-        self.psi_response = pd.read_csv(self.data_folder + f'/extended_psi_response_{self.cell_type}.csv', index_col=0)
-        # copy index to a new column for easier access
-        self.psi_response['event_id'] = self.psi_response.index
-        self.psi_response['event_type'] = "SE"
 
         if self.one_tpm_ar: # remove ar events with less than 1 tpm in the cell line
             self.event_keys = [x for x in self.event_keys if self.psi_response.loc[x, f'{self.cell_type}{self.tpm_level}'] >= np.log10(1+0.1)]
 
-        self.all_event_genes = set(self.psi_response['gene_id'].unique())
+        self.all_event_genes = set(self.psi_response[self.cell_type if self.cell_type != 'both' else 'K562']['gene_id'].unique())
         # K562 promoter data
         promoter_df = pd.read_csv(self.data_folder + 'IHEC-ChIP-Seq-Histone-Signals/Promoter_Combined_K562_Histone_Signals.csv', index_col='gene_id')
         self.promoter_dict['K562'] = promoter_df
@@ -98,7 +115,7 @@ class PEHistoneDataset(Dataset):
 
     def __len__(self): # changed to filter for events 
         if self.include_exons and self.cell_type == 'both':
-            return len(self.event_keys) * 2
+            return len(self.event_keys)
         if self.include_exons:
             return len(self.event_keys)
         if self.filter_for_event_genes:
@@ -109,14 +126,24 @@ class PEHistoneDataset(Dataset):
     def __getitem__(self, idx):       
         histone_marks = ['H3K27ac', 'H3K27me3', 'H3K36me3', 'H3K4me1', 'H3K4me3', 'H3K9me3']
 
+        if self.cell_type == 'both':
+            curr_cell = 'K562' if idx < len(self.psi_response['K562']) else 'GM12878'
+        else:
+            curr_cell = self.cell_type
+        
+        idx = idx if idx < len(self.psi_response['K562']) else idx - len(self.psi_response['K562'])
+
         # added exon & intron sequences
         segment_tensor = torch.Tensor([])
 
-        sequences = self.gene_sequences['event_data'][idx] # (3, 1024, 10)
-        event_name = self.gene_sequences['event_id'][idx].decode() # get event name
-
+        sequences = self.gene_sequences[curr_cell]['event_data'][idx] # (3, 1024, 10)
+        event_name = self.gene_sequences[curr_cell]['event_id'][idx].decode() # get event name
+        
         ### BINARY TESTING
         segment_tensor = torch.from_numpy(np.array(sequences)).float() # convert to tensor
+        if torch.isnan(segment_tensor).any():
+            segment_tensor = torch.nan_to_num(segment_tensor, nan=0.0)
+
         # for the second sequence, find at what idx the padding starts
         ex_mask = (segment_tensor[1] == 0).all(dim=1)
         ex_pad_start = ex_mask.nonzero(as_tuple=True)[0][0] if ex_mask.any() else segment_tensor[1].shape[0]
@@ -141,9 +168,11 @@ class PEHistoneDataset(Dataset):
         ## Retrieve the true values for the expression and psi tensors
         psi_tensor = 0
 
-        event_expr = self.psi_response.loc[event_name]
-        psi_tensor = torch.from_numpy(np.array(event_expr[f'{self.cell_type}_SE_psi'])).float()
+        event_expr = self.psi_response[curr_cell].loc[event_name]
+        psi_tensor = torch.from_numpy(np.array(event_expr[f'{curr_cell}_SE_psi'])).float()
         sample_ensid = event_expr['gene_id']
+
+        assert not torch.isnan(segment_tensor).any(), f"Found NA at idx: {idx} event: {event_name}, cell: {curr_cell}"
         
         return segment_tensor, psi_tensor, sample_ensid
 

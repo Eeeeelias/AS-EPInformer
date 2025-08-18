@@ -522,14 +522,14 @@ class ASLSTM(nn.Module):
         # After concatenation → feature dim = hidden_size * 2
         self.lstm_merged = nn.LSTM(
             input_size=hidden_size * 2,
-            hidden_size=hidden_size,
+            hidden_size=hidden_size * 2,
             batch_first=True,
             bidirectional=False
         )
         
         self.dropout = nn.Dropout(dropout)
         
-        self.fc = nn.Linear(hidden_size, 1)
+        self.fc = nn.Linear(hidden_size * 2, 1)
         
     def forward(self, seq):
         # intron_exon, exon_intron: [batch, 240, 10]
@@ -550,6 +550,81 @@ class ASLSTM(nn.Module):
         
         out = self.fc(dropped)  # [batch, 1]
         
+        return out
+
+
+class TemporalEncoder(nn.Module):
+    """
+    1D temporal encoder over time axis.
+    Input per stream: (B, 10, 240)  -> Output embedding: (B, emb_dim)
+    """
+    def __init__(self, in_ch=10, emb_dim=64, p_drop=0.2):
+        super().__init__()
+        self.conv1 = nn.Conv1d(in_ch, 64, kernel_size=5, padding=2)
+        self.bn1   = nn.BatchNorm1d(64)
+        self.conv2 = nn.Conv1d(64, 64, kernel_size=5, dilation=2, padding=4)
+        self.bn2   = nn.BatchNorm1d(64)
+        self.conv3 = nn.Conv1d(64, emb_dim, kernel_size=5, dilation=4, padding=8)
+        self.bn3   = nn.BatchNorm1d(emb_dim)
+        self.drop  = nn.Dropout(p_drop)
+        # global average pooling over time at the end
+
+    def forward(self, x):            # x: (B, 10, 240)
+        x = self.drop(F.relu(self.bn1(self.conv1(x))))
+        x = self.drop(F.relu(self.bn2(self.conv2(x))))
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = F.adaptive_avg_pool1d(x, 1).squeeze(-1)  # (B, emb_dim)
+        return x
+
+
+class ASdCNNsmall(nn.Module):
+    def __init__(self, emb_dim=64, shared_encoders=True, fusion="mlp", p_drop=0.2):
+        super().__init__()
+        self.name = "ASdCNNsmall"
+        self.shared = shared_encoders
+        self.encA = TemporalEncoder(in_ch=10, emb_dim=emb_dim, p_drop=p_drop)
+        self.encB = self.encA if shared_encoders else TemporalEncoder(in_ch=10, emb_dim=emb_dim, p_drop=p_drop)
+
+        # multiple fusion choices; default: concat + MLP
+        self.fusion = fusion
+        if fusion == "mlp":
+            in_dim = emb_dim * 2
+        elif fusion == "tricks":  # concat + (diff, prod)
+            in_dim = emb_dim * 4
+        elif fusion == "gated":   # learn a gate to weight A vs B
+            in_dim = emb_dim * 3
+            self.gate = nn.Sequential(nn.Linear(emb_dim*2, emb_dim), nn.ReLU(), nn.Linear(emb_dim, 1))
+        else:
+            raise ValueError("fusion must be one of: 'mlp', 'tricks', 'gated'")
+
+        self.cls = nn.Sequential(
+            nn.Dropout(p_drop),
+            nn.Linear(in_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(p_drop),
+            nn.Linear(64, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):            # x: (B, 2, 240, 10)
+        b, two, t, f = x.shape
+        assert two == 2 and f == 10, f"expected (B,2,240,10), got {x.shape}"
+        a = x[:, 0].permute(0, 2, 1)  # (B, 240, 10) -> (B, 10, 240)
+        b_ = x[:, 1].permute(0, 2, 1)
+
+        za = self.encA(a)             # (B, emb_dim)
+        zb = self.encB(b_)
+
+        if self.fusion == "mlp":
+            z = torch.cat([za, zb], dim=1)
+        elif self.fusion == "tricks":
+            z = torch.cat([za, zb, torch.abs(za - zb), za * zb], dim=1)
+        elif self.fusion == "gated":
+            gate = torch.sigmoid(self.gate(torch.cat([za, zb], dim=1)))  # (B,1)
+            z = torch.cat([gate * za + (1 - gate) * zb, torch.cat([za, zb], dim=1)], dim=1)  # emb + context
+        else:
+            raise ValueError("fusion must be one of: 'mlp', 'tricks', 'gated'")
+        out = self.cls(z)
         return out
 
 
