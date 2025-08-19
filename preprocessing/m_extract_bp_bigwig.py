@@ -32,8 +32,8 @@ def resize_seq(seq, length):
     if len(seq) < length:
         seq = np.pad(seq, (0, length - len(seq)), mode='constant')
     elif len(seq) > length:
-        seq = seq[:length]
-    return seq
+        seq = np.array(seq[:length])
+    return np.array(seq)
 
 
 def resize_seq_center(seq, length):

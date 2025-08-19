@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import pysam
 import numpy as np
@@ -12,6 +13,7 @@ from m_extract_bp_bigwig import resize_seq
 
 psi_file = pd.read_csv('../data/transcript_SE_f1.psi', sep='\t')
 fasta_file = pysam.FastaFile('/nfs/data/references/GCA_000001405.15_GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna')
+methylation_base = "/nfs/data/IHEC/RNAseq/WGBS_matrices"
 
 # I need to get sequence info & histone mark info
 
@@ -25,6 +27,12 @@ def get_event_data(event_id):
     intron_seq2 = (event_id.split(":")[3].split("-")[0], event_id.split(":")[3].split("-")[1])
     return {'event': event_id, 'gene_id': gene_id, 'chrom': chrom, 'strand': strand, 
             'intron_seq1': intron_seq1, 'exon_seq': exon_seq, 'intron_seq2': intron_seq2}
+
+
+def sort_event_info(all_event_info):
+    # sort by chromosome
+    sorted_list = sorted(all_event_info, key=lambda x: x['chrom'])
+    return sorted_list
 
 
 def get_sequence(event_info):
@@ -92,11 +100,14 @@ def extract_bp_histone_signals(bigwig_file, full_event_info, seq_len=1024):
         #    'intron_seq1': intron_seq1, 'exon_seq': exon_seq, 'intron_seq2': intron_seq2}
         chrom = event['chrom']
         event_id = event['event']
+        strand = event['strand']
         for part_name in ['intron_seq1', 'exon_seq', 'intron_seq2']:
             part = event[part_name]
             start = int(part[0])
             end = int(part[1])
             values = bw.values(chrom, start, end)
+            if strand == '-': # reverse signal for negative strand
+                values = values[::-1] 
             values = resize_seq(values, seq_len)
             outputs[f"{part_name.replace('_seq', '')}|{event_id}"] = values
 
@@ -104,22 +115,45 @@ def extract_bp_histone_signals(bigwig_file, full_event_info, seq_len=1024):
     return outputs
 
 
-def extract_5mc_signal(bigwig_file, full_event_info, seq_len=1024):
-    bw = pyBigWig.open(bigwig_file)
+def set_meth_data(meth_data, curr_chr, files):
+    K562_id = "IHECRE00001887.4" # IHECRE00001887.4
+    GM12878_id = "IHECRE00001892.4" # IHECRE00001892.4
+    meth_data = pd.read_csv(files[curr_chr], compression='gzip', low_memory=False, usecols=['l', K562_id, GM12878_id])
+    meth_data['l'] = meth_data['l'].astype(int)
+    meth_data = meth_data.rename(columns={K562_id: 'K562', GM12878_id: 'GM12878'})
+    meth_data.set_index('l', inplace=True)
+    return meth_data, curr_chr
+
+
+def extract_5mc_signal(full_event_info, cell_line, seq_len=1024, support=3,):
+    all_chrom = set(event['chrom'] for event in full_event_info)
+    files = {chrom: os.path.join(methylation_base, f"{chrom}.meth{support}.csv.gz") for chrom in all_chrom}
+    full_event_info = sort_event_info(full_event_info)
     outputs = {}
 
-    for event in full_event_info:
+    meth_data, loaded_chr = set_meth_data(pd.DataFrame(), 'chr1', files)
+
+    for event in tqdm(full_event_info):
         chrom = event['chrom']
         event_id = event['event']
+        if chrom != loaded_chr:
+            print(f"Changing chromosome from {loaded_chr} to {chrom}")
+            meth_data, loaded_chr = set_meth_data(meth_data, chrom, files)
+            print(f"Loaded!")
         for part_name in ['intron_seq1', 'exon_seq', 'intron_seq2']:
             part = event[part_name]
             start = int(part[0])
             end = int(part[1])
-            values = bw.values(chrom, start, end)
-            values = resize_seq(values, seq_len)
-            outputs[f"{part_name.replace('_seq', '')}|{event_id}"] = values
+            cg_frame = meth_data[(meth_data.index >= start) & (meth_data.index <= end)]
+            arr = []
+            for i in range(start, end):
+                if i in cg_frame.index and cg_frame.loc[i][cell_line] != -1:
+                    arr.append(cg_frame.loc[i][cell_line].astype(float) / 100)
+                else:
+                    arr.append(0)
+            arr = resize_seq(arr, seq_len)
+            outputs[f"{part_name.replace('_seq', '')}|{event_id}"] = arr
 
-    bw.close()
     return outputs
 
 
@@ -151,18 +185,20 @@ def transform_histones(all_histone_marks):
 
 
 
-def assemble_event(event_seqs, event_hist):
+def assemble_event(event_seqs, event_hist, event_meth):
     # stack sequences from event [(1024, 4), (1024, 4), (1024, 4)] -> (3, 1024, 4)
     stacked_seqs = np.stack([event_seqs['upstream'], event_seqs['exon'], event_seqs['downstream']], axis=0)
     stacked_hist = np.stack(event_hist, axis=0)
-    stacked_all = np.concatenate((stacked_seqs, stacked_hist), axis=-1)  # (3, 1024, 4 + 6)
+    stacked_meth = np.stack(event_meth, axis=0) # 3, 1024 -> unsqueeze to be (3, 1024, 1)
+    stacked_meth = np.expand_dims(stacked_meth, axis=-1)
+    stacked_all = np.concatenate((stacked_seqs, stacked_hist, stacked_meth), axis=-1)  # (3, 1024, 4 + 6 + 1)
     return stacked_all
 
 
 def create_h5_ds(h5_file, dataset, names):
     dt = h5.string_dtype(encoding='utf-8')
     with h5.File(h5_file, 'w') as f:
-        f.create_dataset('event_data', data=dataset, compression='gzip', compression_opts=5, chunks=(1, 3, 1024, 10))
+        f.create_dataset('event_data', data=dataset, compression='gzip', compression_opts=5, chunks=(1, 3, 1024, 11))
         f.create_dataset('event_id', data=names, dtype=dt)
 
         print(f"Dataset created in {h5_file} with {len(names)} events.")
@@ -178,7 +214,7 @@ def create_response(response_file, psi_events, cell_line):
 
 
 if __name__ == "__main__":
-    cell_line = 'GM12878'
+    cell_line = 'K562'
     h5_path = f'../data/extended_events_{cell_line}.h5'
     response_path = f"../data/extended_psi_response_{cell_line}.csv"
     # filter out psi where K562_TPM is nan
@@ -201,12 +237,15 @@ if __name__ == "__main__":
     histone_marks = transform_histones(get_all_histone_marks(file_uuids, cell_line, psi_events))
     print(int(len(histone_marks) / 3), "histone marks extracted")
 
-    event_ds = np.zeros((len(event_seqs), 3, 1024, 4 + 6))
+    methylation_data = extract_5mc_signal(psi_events, cell_line, seq_len=1024, support=3)
+
+    event_ds = np.zeros((len(event_seqs), 3, 1024, 4 + 6 + 1))
     event_names = []
     for i, event_id in enumerate(event_seqs.keys()):
         hist_marks = [histone_marks[f"intron1|{event_id}"], histone_marks[f"exon|{event_id}"], histone_marks[f"intron2|{event_id}"]]
+        meth_data = [methylation_data[f"intron1|{event_id}"], methylation_data[f"exon|{event_id}"], methylation_data[f"intron2|{event_id}"]]
         event_seq = event_seqs[event_id]
-        assembled_event = assemble_event(event_seq, hist_marks)
+        assembled_event = assemble_event(event_seq, hist_marks, meth_data)
         event_ds[i] = assembled_event
         event_names.append(event_id)
 
