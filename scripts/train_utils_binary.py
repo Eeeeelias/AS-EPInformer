@@ -174,11 +174,10 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
     if saved_model_path is not None:
-        early_stopping = EarlyStoppingMulti(expr_patience=1, splice_patience=5,
-                                            path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
+        early_stopping = EarlyStopping(patience=15, path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
                                             verbose=True)
     else:
-        early_stopping = EarlyStoppingMulti(expr_patience=3, splice_patience=3, verbose=True)
+        early_stopping = EarlyStopping(patience=3, verbose=True)
 
     
     # get all PSI values from training dataset
@@ -201,7 +200,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     # optimizer
     all_params = net.parameters() if not learned_loss else list(net.parameters()) + list(loss_class.parameters()) # type: ignore
-    optimizer = torch.optim.AdamW(all_params, lr=learning_rate, weight_decay=1e-6)
+    optimizer = torch.optim.Adam(all_params, lr=learning_rate, weight_decay=1e-6)
     net.train()
 
     # when using the xpu device, optimise the model for the xpu
@@ -226,12 +225,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         running_loss = 0
         expression_loss = 0
         splice_loss = 0
-        #if epoch % update_epochs == 0 and epoch > 0:
-        #    # save both tensors
-        #    adapt_weights = soft_adapt.get_component_weights(torch.tensor(losses_expr), torch.tensor(losses_splice))  
-        # print(f"Expr Adapt Weight: {adapt_weights[0]:.4f}, Splice Adapt Weight: {adapt_weights[1]:.4f}")
 
-        # print('model training mode is:', net.training)
         for data in tqdm(trainloader, bar_format='{desc:<8}{percentage:3.0f}%|{bar:20}{r_bar}', desc=f'Epoch {epoch + 1}'):
             # print(inputs.size())
             optimizer.zero_grad()
@@ -282,7 +276,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
                         expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type)
 
         print('Validation R square all:', val['r2'])
-        early_stopping(val['expression_loss'], val['splice_loss'], net, epoch)
+        early_stopping(val['splice_loss'], net, epoch)
         if loss_file is not None:
             loss_file.write(f"{fold_i},{epoch+1},{running_loss/len(trainloader)},{expression_loss/len(trainloader)}," \
                             f"{splice_loss/len(trainloader)},{val['mse']},{val['r2']},{val['total_loss']}," \
@@ -294,15 +288,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
             model_logger.add([fold_i, epoch, running_loss/len(trainloader), val['mse'], val['pearsonr'], val['r2'], 
                               val['pearsonr'], val['r2'], early_stopping.counter, label_type])
             # model_logger.save("./EPInfomrer_log/{}.crossValid.log".format(net.name.replace('.'+label_type, '')))
-        if early_stopping.expr_early_stop and early_stopping.splice_early_stop:
+        if early_stopping.early_stop:
             print("Early stopping")
             break
-        elif early_stopping.expr_early_stop:
-            print("Early stopping on expression loss")
-            loss_weights[0] = -np.inf
-        elif early_stopping.splice_early_stop:
-            print("Early stopping on splice loss")
-            loss_weights[1] = -np.inf
 
     return lrs
 
@@ -350,7 +338,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
             if len(pred_bin) == 0 or len(y_bin) == 0:
                 continue
             loss_binary = L_binary(pred_bin, y_bin.reshape(pred_bin.shape))
-            splice_loss += loss_binary.item()
+            splice_loss += loss_binary
             loss_e += loss_binary
             outputs_psi = list(torch.sigmoid(pred_bin).flatten().cpu().detach().numpy()) # sigmoid here
             labels_psi = list(y_bin.flatten().cpu().detach().numpy())

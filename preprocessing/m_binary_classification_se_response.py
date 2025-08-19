@@ -104,6 +104,25 @@ def extract_bp_histone_signals(bigwig_file, full_event_info, seq_len=1024):
     return outputs
 
 
+def extract_5mc_signal(bigwig_file, full_event_info, seq_len=1024):
+    bw = pyBigWig.open(bigwig_file)
+    outputs = {}
+
+    for event in full_event_info:
+        chrom = event['chrom']
+        event_id = event['event']
+        for part_name in ['intron_seq1', 'exon_seq', 'intron_seq2']:
+            part = event[part_name]
+            start = int(part[0])
+            end = int(part[1])
+            values = bw.values(chrom, start, end)
+            values = resize_seq(values, seq_len)
+            outputs[f"{part_name.replace('_seq', '')}|{event_id}"] = values
+
+    bw.close()
+    return outputs
+
+
 def get_all_histone_marks(uuids, cell_line, full_event_info):
     all_histone_marks = {}
     for histone_type, tissues in tqdm(uuids.items()):

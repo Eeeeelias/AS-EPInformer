@@ -459,6 +459,48 @@ class ASInformer(nn.Module):
         return x
 
 
+class ASTrInformer(nn.Module):
+    def __init__(self, d_model=128, nhead=2, num_layers=2, dim_feedforward=32, dropout=0.3):
+        super().__init__()
+        self.name = "ASTrInformer"
+
+        self.event_encoder = seq_256bp_encoder_small(base_size=10)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, 
+            nhead=nhead, 
+            dim_feedforward=dim_feedforward, 
+            dropout=dropout,
+            batch_first=True
+        )
+        self.transformer1 = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer2 = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.combination = nn.Sequential(
+            nn.Conv2d(2, 16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((1, 1)),  # global pooling
+            nn.Flatten(),
+            nn.Linear(16, 1),              # binary output
+        )
+
+
+    def forward(self, x):
+        x = self.event_encoder(x)
+        x = x.permute(0, 2, 1, 3) # torch.Size([16, 2, 128, 25])
+        x = x.permute(1, 3, 0, 2) # torch.Size([2, 25, 16, 128])
+
+        x1 = self.transformer1(x[0])
+        x2 = self.transformer2(x[1]) # torch.Size([25, 16, 128])
+        # combine to [16, 2, 25, 128]
+        combined = torch.cat([x1.unsqueeze(1), x2.unsqueeze(1)], dim=1) # torch.Size([25, 2, 16, 128])
+        combined = combined.permute(2, 1, 0, 3)
+
+        # Pass through the combination transformer
+        out = self.combination(combined) # torch.Size([25, 32, 128])
+        
+        # Final prediction
+        return out
+
+
 class ASTransformer(nn.Module):
     def __init__(self, feature_dim=10, d_model=16, nhead=2, num_layers=2, dim_feedforward=32, dropout=0.3):
         super().__init__()

@@ -15,7 +15,7 @@ from torch.utils.data import Subset, Dataset
 import scripts.train_utils as reg_utils
 import scripts.train_utils_binary as bin_utils
 import scripts.setup_utils as sp
-from EPInformer.models_multi import ASInformer, ASTransformer, ASLSTM, ASdCNNsmall
+from EPInformer.models_multi import ASInformer, ASTransformer, ASLSTM, ASdCNNsmall, ASTrInformer
 from scripts.pe_utils import plot_loss_curve
 
 
