@@ -65,7 +65,7 @@ class PEHistoneDataset(Dataset):
             self.psi_response['GM12878'] = pd.read_csv(self.data_folder + '/extended_psi_response_GM12878.csv', index_col=0)
         else:
 
-            self.gene_sequences[self.cell_type] = h5py.File(self.data_folder + f'/extended_events_{self.cell_type}_normal.h5', 'r')
+            self.gene_sequences[self.cell_type] = h5py.File(self.data_folder + f'/extended_events_{self.cell_type}.h5', 'r')
             self.event_keys = [x.decode() for x in self.gene_sequences[self.cell_type]['event_id'][:]] # type: ignore
 
             self.psi_response[self.cell_type] = pd.read_csv(self.data_folder + f'/extended_psi_response_{self.cell_type}.csv', index_col=0)

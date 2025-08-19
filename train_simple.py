@@ -140,7 +140,7 @@ for fi in fold_list:
     elif config.optim.include_exons:
         train_idx, valid_idx, test_idx = sp.split_binary(all_ds.event_keys, train_frac=0.8, val_frac=0.1,test_frac=0.1, 
                                                          seed=42+int(fi), short_run=config.debug.short_run, 
-                                                         split_simple=True)
+                                                         split_simple=False)
     else:
         train_idx, valid_idx, test_idx = sp.create_set_indices(all_ds, train_ratio=0.8, valid_ratio=0.1,
                                                             events=False, seed=42+int(fi), splits=split_df, fold_i=fold_i)

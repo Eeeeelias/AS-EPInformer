@@ -174,7 +174,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
     if saved_model_path is not None:
-        early_stopping = EarlyStopping(patience=15, path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
+        early_stopping = EarlyStopping(patience=10, path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
                                             verbose=True)
     else:
         early_stopping = EarlyStopping(patience=3, verbose=True)
@@ -397,7 +397,8 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
         avg_r2 = r2_value
 
     return {'mse': mse, 'r2': avg_r2, 'peasonr': peasonr, 'total_loss': loss_e / len(validloader), 
-            'expression_loss': expression_loss / len(validloader), 'splice_loss': splice_loss / len(validloader)}
+            'expression_loss': expression_loss / len(validloader), 'splice_loss': splice_loss / len(validloader),
+            'auroc': auroc, 'mcc': mcc, 'bal_acc': bal_acc,}
 
 
 def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_size=64, device = 'cuda', 
