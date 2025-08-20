@@ -1,3 +1,4 @@
+import os
 import pyBigWig
 import pandas as pd
 import h5py as h5
@@ -25,6 +26,60 @@ def process_histone_signals(bed_file, existing_h5=None, proc_events=True, only_c
                 hist_arr = combine_enhancers(hist_outs, existing_h5)
             dataset_dict[tissue][histone_type] = hist_arr
 
+    return dataset_dict
+
+
+def process_methylation_signal(bed_file, existing_h5=None, proc_events=True, only_cell=None, support=3):
+    # for chrom, start, end, name, gene, _ in bed.itertuples(index=False, name=None): # gene colum only makes sense for enhancers
+    methylation_base = "/nfs/data/IHEC/RNAseq/WGBS_matrices"
+    bed = pd.read_csv(bed_file, sep='\t', header=None)
+    all_chrom = set(bed[0].values)
+    files = {chrom: os.path.join(methylation_base, f"{chrom}.meth{support}.csv.gz") for chrom in all_chrom}
+    sorted_bed = bed.sort_values(by=[0])  # sort by chrom
+
+    dataset_dict = {cell: {} for cell in file_uuids[list(file_uuids.keys())[0]].keys()}
+
+    for cell in ['K562', 'GM12878']:
+        if only_cell and cell != only_cell:
+            continue
+        meth_outs = extract_bp_methylation_signal(sorted_bed, cell, files)
+        meth_arr = combine_events(meth_outs)
+        print(meth_arr.shape)
+        dataset_dict[cell]['methylation'] = meth_arr
+
+    return dataset_dict
+
+
+def set_meth_data(meth_data, curr_chr, files):
+    print(f"Loading methylation data for {curr_chr}")
+    K562_id = "IHECRE00001887.4" # IHECRE00001887.4
+    GM12878_id = "IHECRE00001892.4" # IHECRE00001892.4
+    meth_data = pd.read_csv(files[curr_chr], compression='gzip', low_memory=False, usecols=['l', K562_id, GM12878_id])
+    meth_data['l'] = meth_data['l'].astype(int)
+    meth_data = meth_data.rename(columns={K562_id: 'K562', GM12878_id: 'GM12878'})
+    meth_data.set_index('l', inplace=True)
+    print("Loaded!")
+    return meth_data, curr_chr
+
+
+def extract_bp_methylation_signal(bed, cell_line, files):
+    dataset_dict = {}
+    meth_data, loaded_chr = set_meth_data(pd.DataFrame(), 'chr1', files)
+
+    for chrom, start, end, name, gene, _ in bed.itertuples(index=False, name=None):
+        if chrom != loaded_chr:
+            meth_data, loaded_chr = set_meth_data(meth_data, chrom, files)
+
+        cg_frame = meth_data[(meth_data.index >= start) & (meth_data.index <= end)]
+        arr = []
+        for i in range(start, end):
+            if i in cg_frame.index and cg_frame.loc[i][cell_line] != -1:
+                arr.append(cg_frame.loc[i][cell_line].astype(float) / 100)
+            else:
+                arr.append(0)
+        arr = resize_seq(arr, length=1024)
+        dataset_dict[name] = arr
+        break
     return dataset_dict
 
 
@@ -130,11 +185,15 @@ def create_h5_dataset(h5_file, histone_arr, proc_events=True):
 
 
 if __name__ == "__main__":
-    process_events = False # if False, process enhancers
+    process_events = True # if False, process enhancers
     if process_events:
         bed_file = "../data/extracted_events.bed"
         h5_file = "../data/event_bp_histone_marks.h5"
-        dataset_raw = process_histone_signals(bed_file, proc_events=process_events)
+        dataset_meth = process_methylation_signal(bed_file, proc_events=process_events, support=3)
+        dataset_hist = process_histone_signals(bed_file, proc_events=process_events)
+        # combine dataset_meth and dataset_hist {'K562': {'methylation': [...], 'H3K27ac': [...], ...}, 'GM12878': {...}}
+        dataset_raw = {cell: {**dataset_meth[cell], **dataset_hist[cell]} for cell in dataset_meth.keys()}
+        print(dataset_raw['K562'].keys())
         create_h5_dataset(h5_file, dataset_raw)
     else:
         # K562

@@ -210,7 +210,7 @@ class EPInformer_v2(nn.Module):
                         f'{separate_attention}exonAttn.{use_histones}histones'
         
         if self.use_exon_data:
-            self.event_encoder = seq_256bp_encoder_small(base_size=10)
+            self.event_encoder = seq_256bp_encoder_small(base_size=4)
 
         if useLN: # use layer norm
             self.attn_encoder = get_clones(MHAttention_encoderLayer(d_model=out_dim, nhead=head), self.n_encoder)
@@ -425,6 +425,7 @@ class EPInformer_v2(nn.Module):
 
         return p_expr, p_splice_binary_logits, p_splice_regression, torch.cat(attn_list)
 
+### BELOW ONLY USED FOR TESTING BINARY PREDICTION
 
 class ASInformer(nn.Module):
     def __init__(self):

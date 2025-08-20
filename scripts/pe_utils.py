@@ -323,6 +323,9 @@ def perturb_enhancer(model, pe_df, use_hic=False, device='cpu'):
 
 
 def plot_loss_curve(model_dir):
+    if not os.path.exists(model_dir):
+        print(f"Model directory {model_dir} does not exist. No loss curve.")
+        return
     csv_file = f"{model_dir}/losses.csv"
     df = pd.read_csv(csv_file)
     # contains fold,epoch,training_loss,train_expr_loss,train_splice_loss,val_mse,val_r2,val_loss,val_expr,val_splice

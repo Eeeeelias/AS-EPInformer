@@ -52,7 +52,7 @@ class PEHistoneDataset(Dataset):
         self.tpm_level = "_summed_tpm" if tpm == 'transcript' else "_gene_level_tpm"
         self.gene_sequences = h5py.File(self.data_folder + '/event_encoding.h5', 'r')
         self.event_histone_seqs = h5py.File(self.data_folder + '/event_bp_histone_marks.h5', 'r')
-        self.event_keys = [x.decode() for x in self.gene_sequences['event_id'][:]] # type: ignore
+        self.event_keys = [x.decode() for x in self.gene_sequences['event_id'][:]] # type:ignore
         if self.remove_ar:
             self.event_keys = [x for x in self.event_keys if ';AR:' not in x]
         self.psi_response = pd.read_csv(self.data_folder + '/psi_response.csv', index_col=0)
@@ -161,27 +161,6 @@ class PEHistoneDataset(Dataset):
             event_hist_tensor = torch.from_numpy(np.stack(event_histones, axis=-1))
             # add a zero tensor to emulate distance
             event_hist_tensor = torch.cat([torch.zeros((event_hist_tensor.shape[0], 1)), event_hist_tensor], dim=-1)
-            ### BINARY TESTING
-            # get bp level histone info
-            bp_histone_marks = [self.event_histone_seqs[self.cell_type][x][event_idx] for x in histone_marks]
-            bp_histone_marks = np.concatenate(bp_histone_marks, axis=-1)
-            segment_tensor = torch.cat([segment_tensor, torch.from_numpy(bp_histone_marks)], dim=-1) # 3, 1024, 10
-            # for the second sequence, find at what idx the padding starts
-            ex_mask = (segment_tensor[1] == 0).all(dim=1)
-            ex_pad_start = ex_mask.nonzero(as_tuple=True)[0][0] if ex_mask.any() else segment_tensor[1].shape[0]
-            in_mask = (segment_tensor[0] == 0).all(dim=1)
-            in_pad_start = in_mask.nonzero(as_tuple=True)[0][0] if in_mask.any() else segment_tensor[0].shape[0]
-            junction1 = torch.cat([segment_tensor[0, in_pad_start-120:in_pad_start, :], segment_tensor[1, :0+120, :]], dim=0)
-            junction2 = torch.cat([segment_tensor[1, ex_pad_start-120:ex_pad_start, :], segment_tensor[2, :0+120, :]], dim=0)
-            # if junctions less than [240, 10], pad first dim with 0
-            if junction1.shape[0] < 240:
-                pad = 240 - junction1.shape[0]
-                junction1 = F.pad(junction1, (0, 0, pad, 0))
-            if junction2.shape[0] < 240:
-                pad = 240 - junction2.shape[0]
-                junction2 = F.pad(junction2, (0, 0, pad, 0))
-            segment_tensor = torch.stack([junction1, junction2], dim=0) # 2, 240, 10
-            ### END
 
 
         promoter_code = seq_code[:1]
