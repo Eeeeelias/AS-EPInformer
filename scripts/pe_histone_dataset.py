@@ -128,7 +128,7 @@ class PEHistoneDataset(Dataset):
             raise ValueError(f"Cell type {self.cell_type} not supported. Choose 'K562' or 'GM12878'.")
         
         cell_tensor = torch.tensor([0, 1, 0]) if curr_cell_type == 'K562' else torch.tensor([1, 0, 0])
-        histone_marks = ['H3K27ac', 'H3K27me3', 'H3K36me3', 'H3K4me1', 'H3K4me3', 'H3K9me3']
+        histone_marks = ['H3K27ac', 'H3K27me3', 'H3K36me3', 'H3K4me1', 'H3K4me3', 'H3K9me3', 'methylation']
 
         if self.include_exons:
             if self.idx_map is not None:
@@ -145,7 +145,7 @@ class PEHistoneDataset(Dataset):
         sample_ensid = data_h5['gene_id'][idx].decode()
         seq_code = data_h5['pe_seqs'][idx]
         enhancer_distance = data_h5['distance'][idx,1:] # from the old h5, thus 1:
-        enhancer_data = {key: data_h5[key][idx,:] for key in histone_marks}
+        enhancer_data = {key: data_h5[key][idx,:] for key in histone_marks if key in data_h5}
         enhancer_intensity = enhancer_data.pop('H3K27ac', None)
         enhancer_histones = np.stack([x for x in enhancer_data.values()], axis=-1)
 
@@ -157,10 +157,16 @@ class PEHistoneDataset(Dataset):
             event_idx = np.where(self.gene_sequences['event_id'][:] == event.encode())[0][0]
             assert event == self.gene_sequences['event_id'][event_idx].decode(), "Event ID mismatch!"
             segment_tensor = torch.from_numpy(self.gene_sequences['event_seq'][event_idx])
-            event_histones = [self.gene_sequences[f"{x}_{self.cell_type}"][event_idx,:] for x in histone_marks]
+            event_histones = [self.gene_sequences[f"{x}_{self.cell_type}"][event_idx,:] for x in histone_marks 
+                              if f"{x}_{self.cell_type}" in self.gene_sequences]
             event_hist_tensor = torch.from_numpy(np.stack(event_histones, axis=-1))
             # add a zero tensor to emulate distance
             event_hist_tensor = torch.cat([torch.zeros((event_hist_tensor.shape[0], 1)), event_hist_tensor], dim=-1)
+            ### ADDING HISTONE DATA PRELIM
+            bp_histone_marks = [self.event_histone_seqs[self.cell_type][x][event_idx] for x in histone_marks]
+            bp_histone_marks = np.concatenate(bp_histone_marks, axis=-1)
+            segment_tensor = torch.cat([segment_tensor, torch.from_numpy(bp_histone_marks)], dim=-1) # 3, 1024, 11
+            print(segment_tensor.shape)
 
 
         promoter_code = seq_code[:1]

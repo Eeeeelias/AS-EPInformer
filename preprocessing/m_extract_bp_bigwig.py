@@ -32,18 +32,27 @@ def process_histone_signals(bed_file, existing_h5=None, proc_events=True, only_c
 def process_methylation_signal(bed_file, existing_h5=None, proc_events=True, only_cell=None, support=3):
     # for chrom, start, end, name, gene, _ in bed.itertuples(index=False, name=None): # gene colum only makes sense for enhancers
     methylation_base = "/nfs/data/IHEC/RNAseq/WGBS_matrices"
-    bed = pd.read_csv(bed_file, sep='\t', header=None)
-    all_chrom = set(bed[0].values)
+    if proc_events:
+        bed = pd.read_csv(bed_file, sep='\t', header=None)
+        all_chrom = set(bed[0].values)
+        sorted_bed = bed.sort_values(by=[0])  # sort by chrom
+    else:
+        bed = pd.read_csv(bed_file, sep=',')
+        all_chrom = set(bed['chrom'].values)
+        sorted_bed = bed.sort_values(by=['chrom'])
+    
     files = {chrom: os.path.join(methylation_base, f"{chrom}.meth{support}.csv.gz") for chrom in all_chrom}
-    sorted_bed = bed.sort_values(by=[0])  # sort by chrom
 
     dataset_dict = {cell: {} for cell in file_uuids[list(file_uuids.keys())[0]].keys()}
 
     for cell in ['K562', 'GM12878']:
         if only_cell and cell != only_cell:
             continue
-        meth_outs = extract_bp_methylation_signal(sorted_bed, cell, files)
-        meth_arr = combine_events(meth_outs)
+        meth_outs = extract_bp_methylation_signal(sorted_bed, cell, files, proc_events)
+        if proc_events:
+            meth_arr = combine_events(meth_outs)
+        else: 
+            meth_arr = combine_enhancers(meth_outs, existing_h5)
         print(meth_arr.shape)
         dataset_dict[cell]['methylation'] = meth_arr
 
@@ -51,7 +60,7 @@ def process_methylation_signal(bed_file, existing_h5=None, proc_events=True, onl
 
 
 def set_meth_data(meth_data, curr_chr, files):
-    print(f"Loading methylation data for {curr_chr}")
+    print(f"Loading methylation data for {curr_chr}...", end="")
     K562_id = "IHECRE00001887.4" # IHECRE00001887.4
     GM12878_id = "IHECRE00001892.4" # IHECRE00001892.4
     meth_data = pd.read_csv(files[curr_chr], compression='gzip', low_memory=False, usecols=['l', K562_id, GM12878_id])
@@ -62,8 +71,8 @@ def set_meth_data(meth_data, curr_chr, files):
     return meth_data, curr_chr
 
 
-def extract_bp_methylation_signal(bed, cell_line, files):
-    dataset_dict = {}
+def extract_bp_methylation_signal(bed, cell_line, files, proc_events):
+    dataset_dict = {} if proc_events else {x: {} for x in bed['gene_id'].unique()}
     meth_data, loaded_chr = set_meth_data(pd.DataFrame(), 'chr1', files)
 
     for chrom, start, end, name, gene, _ in bed.itertuples(index=False, name=None):
@@ -77,9 +86,12 @@ def extract_bp_methylation_signal(bed, cell_line, files):
                 arr.append(cg_frame.loc[i][cell_line].astype(float) / 100)
             else:
                 arr.append(0)
-        arr = resize_seq(arr, length=1024)
-        dataset_dict[name] = arr
-        break
+        if proc_events:
+            arr = resize_seq(arr, length=1024)
+            dataset_dict[name] = arr
+        else:
+            arr = resize_seq_center(arr, length=2000)
+            dataset_dict[gene][name] = arr
     return dataset_dict
 
 
@@ -122,6 +134,8 @@ def extract_bp_histone_signals(bigwig_file, bed_file, proc_events, seq_len=1024)
 
     for chrom, start, end, name, gene, _ in bed.itertuples(index=False, name=None): # gene colum only makes sense for enhancers
         values = bw.values(chrom, start, end)
+        if name.endswith("-"): # negative strand we need to reverse signal
+            values = values[::-1]
         if proc_events:
             values = resize_seq(values, seq_len) 
             outputs[name] = values
@@ -138,7 +152,7 @@ def combine_events(event_parts):
 
     :event_parts: A dictionary containing the sequence info per event
     """
-    events = sorted([x.split("|")[1] for x in event_parts.keys()]) # events in event_encoding.h5 are sorted
+    events = sorted(list({x.split("|")[1] for x in event_parts.keys()})) # events in event_encoding.h5 are sorted
     n_events = len(events)
 
     histone_arr = np.zeros((n_events, 3, 1024, 1))
@@ -185,15 +199,13 @@ def create_h5_dataset(h5_file, histone_arr, proc_events=True):
 
 
 if __name__ == "__main__":
-    process_events = True # if False, process enhancers
+    process_events = False # if False, process enhancers
     if process_events:
         bed_file = "../data/extracted_events.bed"
         h5_file = "../data/event_bp_histone_marks.h5"
         dataset_meth = process_methylation_signal(bed_file, proc_events=process_events, support=3)
         dataset_hist = process_histone_signals(bed_file, proc_events=process_events)
-        # combine dataset_meth and dataset_hist {'K562': {'methylation': [...], 'H3K27ac': [...], ...}, 'GM12878': {...}}
         dataset_raw = {cell: {**dataset_meth[cell], **dataset_hist[cell]} for cell in dataset_meth.keys()}
-        print(dataset_raw['K562'].keys())
         create_h5_dataset(h5_file, dataset_raw)
     else:
         # K562
@@ -201,7 +213,9 @@ if __name__ == "__main__":
         new_k562_h5 = "../data/K562_histone_enhancer_marks.h5"
         existing_k562_h5 = "../data/K562_histone_appended_pe_encoding.h5"
         existing_k562_h5 = h5.File(existing_k562_h5, "r")
-        dataset_raw = process_histone_signals(k562_link_file, existing_k562_h5, proc_events=process_events, only_cell='K562')
+        dataset_meth = process_methylation_signal(k562_link_file, existing_h5=existing_k562_h5, proc_events=process_events, only_cell='K562')
+        dataset_hist = process_histone_signals(k562_link_file, existing_k562_h5, proc_events=process_events, only_cell='K562')
+        dataset_raw = {cell: {**dataset_meth[cell], **dataset_hist[cell]} for cell in dataset_meth.keys()}
         create_h5_dataset(new_k562_h5, dataset_raw, proc_events=process_events)
         existing_k562_h5.close()
 
@@ -210,6 +224,8 @@ if __name__ == "__main__":
         new_gm12878_h5 = "../data/GM12878_histone_enhancer_marks.h5"
         existing_gm12878_h5 = "../data/GM12878_histone_appended_pe_encoding.h5"
         existing_gm12878_h5 = h5.File(existing_gm12878_h5, "r")
-        dataset_raw = process_histone_signals(gm12878_link_file, existing_gm12878_h5, proc_events=process_events, only_cell='GM12878')
+        dataset_meth = process_methylation_signal(gm12878_link_file, existing_h5=existing_gm12878_h5, proc_events=process_events, only_cell='GM12878')
+        dataset_hist = process_histone_signals(gm12878_link_file, existing_gm12878_h5, proc_events=process_events, only_cell='GM12878')
+        dataset_raw = {cell: {**dataset_meth[cell], **dataset_hist[cell]} for cell in dataset_meth.keys()}
         create_h5_dataset(new_gm12878_h5, dataset_raw, proc_events=process_events)
         existing_gm12878_h5.close()
