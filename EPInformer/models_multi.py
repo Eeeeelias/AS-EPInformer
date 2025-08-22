@@ -180,7 +180,7 @@ class MHAttention_encoderLayer_noLN(nn.Module):
 class EPInformer_v2(nn.Module):
     def __init__(self, base_size = 4, n_encoder=3, out_dim=128, head = 4, pre_trained_encoder= None, n_enhancer=50, 
                  device='cuda', useBN=True, usePromoterSignal=True, useFeat=True, n_extraFeat=0, useLN=True, exon_data=False,
-                 separate_attention=False, use_histones=False, name_add=None):
+                 separate_attention=False, use_histones=False, name_add=None, junctions=False):
         super(EPInformer_v2, self).__init__()
         self.n_enhancer = n_enhancer
         self.out_dim = out_dim
@@ -190,6 +190,7 @@ class EPInformer_v2(nn.Module):
         self.useBN = useBN
         self.base_size = base_size
         self.useLN = useLN
+        self.junctions = junctions
         self.n_encoder = n_encoder
         self.device = device
         self.use_exon_data = exon_data
@@ -210,7 +211,7 @@ class EPInformer_v2(nn.Module):
                         f'{separate_attention}exonAttn.{use_histones}histones'
         
         if self.use_exon_data:
-            self.event_encoder = seq_256bp_encoder_small(base_size=4)
+            self.event_encoder = seq_256bp_encoder_small(base_size=11)
 
         if useLN: # use layer norm
             self.attn_encoder = get_clones(MHAttention_encoderLayer(d_model=out_dim, nhead=head), self.n_encoder)
@@ -218,9 +219,11 @@ class EPInformer_v2(nn.Module):
             self.attn_encoder = get_clones(MHAttention_encoderLayer_noLN(d_model=out_dim, nhead=head), self.n_encoder)
        
         # get attention masks for promoter and exon data
-        self.attn_mask = self.promoter_attention_mask(additional_dim= 4 if self.use_exon_data else 1)
+        add_dim, n_last = (4, 3) if not self.junctions else (3, 2)
+
+        self.attn_mask = self.promoter_attention_mask(additional_dim=add_dim if self.use_exon_data else 1)
         if self.separate_attention:
-            self.exon_attn_mask = self.exon_attention_mask(additional_dim=4, n_attend_last=3)
+            self.exon_attn_mask = self.exon_attention_mask(additional_dim=add_dim, n_attend_last=n_last)
         else:
             self.exon_attn_mask = self.attn_mask
 
@@ -255,7 +258,7 @@ class EPInformer_v2(nn.Module):
                 nn.Conv2d(in_channels = 64, out_channels=32, kernel_size=(1, 1)),
                 nn.BatchNorm2d(32),
                 nn.ELU(),
-                nn.Linear(40, int(self.out_dim/32)), # added 40 to account for the event length
+                nn.Linear(1 if self.junctions else 40, int(self.out_dim/32)), # added 40 to account for the event length
                 nn.ELU(),
             )
         else:
@@ -340,7 +343,7 @@ class EPInformer_v2(nn.Module):
 
     def exon_attention_mask(self, additional_dim=4, n_attend_last=3):
         # attend to the last three tokens (intron, exon, intron sequence) and nothing else
-        assert additional_dim >= 4, "additional_dim must be at least 4 for exon attention mask"
+        # assert additional_dim >= 4, "additional_dim must be at least 4 for exon attention mask"
 
         attn_mask = (~np.identity(self.n_enhancer+additional_dim).astype(bool))
         # attend promoter

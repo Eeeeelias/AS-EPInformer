@@ -132,7 +132,9 @@ for fi in fold_list:
                         'rna_seq_source': config.optim.rna_seq_source,
                         'tpm_level': config.optim.tpm_level,
                         'single_events': config.optim.single_events,
-                        'event_genes': config.optim.event_genes}
+                        'event_genes': config.optim.event_genes,
+                        'use_junctions': config.optim.junction_length > 0,
+                        'junction_length': config.optim.junction_length,}
 
     all_ds = sp.init_dataset(config.base.dataset, dataset_options, ablation_tests)
 
@@ -166,10 +168,10 @@ for fi in fold_list:
     else:
         encoder = None
 
-    model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=encoder, n_enhancer=n_enhancers, 
+    model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=encoder, n_enhancer=n_enhancers, base_size=4,
                             out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=config.optim.include_exons, 
                             separate_attention=True, use_histones=config.optim.enhancer_histones, 
-                            name_add=config.base.name).to(device)
+                            name_add=config.base.name, junctions=config.optim.junction_length > 0).to(device)
 
     if config.optim.learn_loss_weights:
         print("Learning loss weights for the splicing and expression tasks.")

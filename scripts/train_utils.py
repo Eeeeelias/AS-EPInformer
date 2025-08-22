@@ -66,6 +66,14 @@ def get_sample_weights(trainloader, device='cpu', filter_ones=True):
     return dw, pos_weight
 
 
+def custom_bce(logits, targets):
+    bce_loss = nn.BCEWithLogitsLoss(reduction='none')
+    loss = bce_loss(logits, targets)
+    weights = torch.ones_like(loss)
+    weights[targets == 1] *= 0.1
+    weighted = torch.sum(loss * weights) / torch.sum(weights)
+
+    return weighted
 
 def get_loss_function(expr_loss_type='mse', splice_loss_type='bce', **kwargs):
     """Get the loss function based on the specified type."""
@@ -80,6 +88,8 @@ def get_loss_function(expr_loss_type='mse', splice_loss_type='bce', **kwargs):
         L_splice = nn.BCEWithLogitsLoss(**kwargs)
     elif splice_loss_type == 'smoothl1':
         L_splice = nn.SmoothL1Loss(**kwargs)
+    elif splice_loss_type == 'custom_bce':
+        L_splice = custom_bce
     else:
         raise ValueError(f"Unsupported splice loss type: {splice_loss_type}")
     return L_expr, L_splice
@@ -112,7 +122,7 @@ def setup_loss_file(saved_model_path):
         os.mkdir(saved_model_path)
     if saved_model_path and not os.path.exists(saved_model_path + "/losses.csv"):
         loss_file = open(saved_model_path + "/losses.csv", "w", encoding='utf-8')
-        loss_file.write("fold,epoch,training_loss,expresssion_loss,splice_loss,validation_mse,validation_r2\n")
+        loss_file.write("fold,epoch,training_loss,train_expr_loss,train_splice_loss,val_mse,val_r2,val_loss,val_expr,val_splice\n")
     elif saved_model_path:
         loss_file = open(saved_model_path + "/losses.csv", "a", encoding='utf-8')
     else:
@@ -140,7 +150,7 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
     print("fold", fold_i ,"training data:", len(train_ds), "validated data:", len(valid_ds), 'total data:', len(training_dataset))
     trainloader = data_utils.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=5, pin_memory=True)
     if saved_model_path is not None:
-        early_stopping = EarlyStoppingMulti(expr_patience=1, splice_patience=2,
+        early_stopping = EarlyStoppingMulti(expr_patience=1, splice_patience=3,
                                             path=f"{saved_model_path}/fold_{fold_i}_best_{model_name}_checkpoint.pt",
                                             verbose=True)
     else:
@@ -238,8 +248,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         losses_expr.append(expression_loss/len(trainloader))
         losses_splice.append(splice_loss/len(trainloader))
 
-        val = validate(net, valid_ds, n_enhancers=n_enhancers, device=device, predict=predict, 
-                        expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type)
+        val = validate(net, valid_ds, device=device, predict=predict, expr_loss_type=expr_loss_type, 
+                       splice_loss_type=splice_loss_type)
 
         print('Validation R square all:', val['r2'])
         early_stopping(val['expression_loss'], val['splice_loss'], net, epoch)
@@ -266,8 +276,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
     return lrs
 
-def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_size=16, device = 'cuda', 
-             predict='multi', loss_weights=(1.0, 1.0, 1.0), expr_loss_type='mse', splice_loss_type='bce') -> dict:
+def validate(net, valid_ds, batch_size=16, device = 'cuda', predict='multi', loss_weights=(1.0, 1.0, 1.0), 
+             expr_loss_type='mse', splice_loss_type='bce') -> dict:
     validloader = data_utils.DataLoader(valid_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
     net.eval()
     L_expr, L_psi = get_loss_function(expr_loss_type=expr_loss_type, splice_loss_type=splice_loss_type)
@@ -331,7 +341,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
           f"splice loss: {splice_loss / len(validloader):.5f}")
     print("\n### Validation ### TPM expresion ###")
     print(f'### Min-Max Expression: {min_max_expr[0]:.5f}, {min_max_expr[1]:.5f}')
-    print(f"### MSE:{mse:.5f} R²: {r2_value:.5f} PeasonR: {peasonr:.5f}\n")
+    print(f"### MSE: {mse:.5f} R²: {r2_value:.5f} PeasonR: {peasonr:.5f}\n")
 
     try:
         r2_value_psi = r2_score(actual_psi, preds_psi)
@@ -342,7 +352,7 @@ def validate(net, valid_ds,  net_type = 'seq_feat_dist', n_enhancers=50, batch_s
 
     print("### Validation ### PSI expression ###")
     print(f'### Min-Max PSI: {min_max_psi[0]:.5f}, {min_max_psi[1]:.5f}')
-    print(f"### MSE:, {mse_psi:.5f} R²: {r2_value_psi:.5f} PeasonR: {peasonr_psi:.5f}")
+    print(f"### MSE: {mse_psi:.5f} R²: {r2_value_psi:.5f} PeasonR: {peasonr_psi:.5f}\n")
 
     # get average r2 
     if predict == 'multi':

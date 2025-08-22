@@ -205,6 +205,8 @@ def init_dataset(dataset_class, input_config, ablation_tests=None):
         'tpm': input_config['tpm_level'],
         'single_event_train': input_config['single_events'],
         'event_genes': input_config['event_genes'],
+        'use_junctions': input_config['use_junctions'],
+        'junction_length': input_config['junction_length']
     }
 
     # Merge in ablation tests if any
