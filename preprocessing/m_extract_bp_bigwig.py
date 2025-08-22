@@ -6,6 +6,13 @@ import numpy as np
 
 from m_read_histone_signals_events import file_uuids, get_file_name
 
+try:
+    ENCODED_EVENTS = h5.File('../data/event_encoding.h5', 'r')
+    ORIG_EVENT_ORDER = [ev_id.decode() for ev_id in ENCODED_EVENTS['event_id']]
+except FileNotFoundError as e:
+    raise FileNotFoundError("Encoded events file not found (event_encoding.h5)!")
+
+
 
 def process_histone_signals(bed_file, existing_h5=None, proc_events=True, only_cell=None):
     # need a dict that per tissue (cell line) holds a np array per histone signal
@@ -152,12 +159,12 @@ def combine_events(event_parts):
 
     :event_parts: A dictionary containing the sequence info per event
     """
-    events = sorted(list({x.split("|")[1] for x in event_parts.keys()})) # events in event_encoding.h5 are sorted
-    n_events = len(events)
+    n_events = len(ORIG_EVENT_ORDER)
+    print(f"Combining {n_events} events...")
 
     histone_arr = np.zeros((n_events, 3, 1024, 1))
 
-    for i, ev in enumerate(events):
+    for i, ev in enumerate(ORIG_EVENT_ORDER):
         intron1_data = event_parts[f"intron1|{ev}"]
         exon_data = event_parts[f"exon|{ev}"]
         intron2_data = event_parts[f"intron2|{ev}"]
@@ -199,7 +206,7 @@ def create_h5_dataset(h5_file, histone_arr, proc_events=True):
 
 
 if __name__ == "__main__":
-    process_events = False # if False, process enhancers
+    process_events = True # if False, process enhancers
     if process_events:
         bed_file = "../data/extracted_events.bed"
         h5_file = "../data/event_bp_histone_marks.h5"
