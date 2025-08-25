@@ -125,6 +125,8 @@ for fi in fold_list:
                         'include_enhancers': config.optim.enhancer_histones,
                         'rna_seq_source': config.optim.rna_seq_source,
                         'tpm_level': config.optim.tpm_level,
+                        'use_junctions': True, # doesn't change anything, but they're always on
+                        'junction_length': 400,
                         'single_events': config.optim.single_events,
                         'event_genes': config.optim.event_genes}
 

@@ -25,6 +25,8 @@ def get_event_data(event_id):
     intron_seq1 = (event_id.split(":")[2].split("-")[0], event_id.split(":")[2].split("-")[1])
     exon_seq = (event_id.split(":")[2].split("-")[1], event_id.split(":")[3].split("-")[0])
     intron_seq2 = (event_id.split(":")[3].split("-")[0], event_id.split(":")[3].split("-")[1])
+    if strand == '-': # swap them to be consistent
+        intron_seq1, intron_seq2 = intron_seq2, intron_seq1
     return {'event': event_id, 'gene_id': gene_id, 'chrom': chrom, 'strand': strand, 
             'intron_seq1': intron_seq1, 'exon_seq': exon_seq, 'intron_seq2': intron_seq2}
 
