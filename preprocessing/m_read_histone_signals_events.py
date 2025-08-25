@@ -107,7 +107,7 @@ def process_histone_signals():
     for histone_type, tissues in file_uuids.items():
         for tissue, uuid in tissues.items():
             bigwig_file = get_file_name(uuid)
-            bed_file = f"data/extracted_events.bed"
+            bed_file = f"../data/extracted_events.bed"
             name_suffix = "Events"
             output_file = f"{output_dir}/{name_suffix}{tissue}.{histone_type}.tab"
 
@@ -139,8 +139,8 @@ def combine_signal_files(output_files, column='mean'):
 
 
 if __name__ == "__main__":
-    events = get_events("data/psi_response.csv")
-    create_bed_file(events, 'data/extracted_events.bed')
+    events = get_events("../data/psi_response.csv")
+    create_bed_file(events, '../data/extracted_events.bed')
     output_files = process_histone_signals()
     combine_signal_files(output_files)
     print("All histone signals for events extracted successfully.")

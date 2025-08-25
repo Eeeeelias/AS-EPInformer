@@ -198,8 +198,8 @@ def create_event_h5(event_h5, gene_sequences, histone_info):
 
 
 if __name__ == "__main__":
-    cell_line = 'K562'
-    create = 'genes'  # 'events' or 'genes'
+    cell_line = 'GM12878'
+    create = 'events'  # events
 
     # load all the h5 files
     if cell_line == 'K562':
@@ -207,7 +207,7 @@ if __name__ == "__main__":
     else:
         current_h5 = h5.File(f'../data/{cell_line}_DNase_ENCFF020WZB_2kb_4DNFI1UEG1HD_promoter_enhancer_encoding.h5', 'r')
     if create == 'events':
-        event_h5 = h5.File(f'../data/{cell_line}_event_encoding.h5', 'w')
+        event_h5 = h5.File(f'../data/event_encoding.h5', 'w')
         gene_sequences = h5.File('../data/event_sequences.h5', 'r')
     else:
         new_gene_h5 = h5.File(f'../data/{cell_line}_histone_appended_pe_encoding.h5', 'w')
