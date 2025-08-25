@@ -48,13 +48,20 @@ def get_events(file_path):
         intron1_len = int(parts[2].split('-')[1]) - int(parts[2].split('-')[0])
         intron2_len = int(parts[3].split('-')[1]) - int(parts[3].split('-')[0])
         if not intron1_len > 1024:
-            event_parts['intron1'].append(parts[2]) # first intron
+            intron1 = parts[2]
         else:
-            event_parts['intron1'].append(f"{int(parts[2].split('-')[1]) - 1024}-{int(parts[2].split('-')[1])}")
+            intron1 = f"{int(parts[2].split('-')[1]) - 1024}-{int(parts[2].split('-')[1])}"
         if not intron2_len > 1024:
-            event_parts['intron2'].append(parts[3])
+            intron2 = parts[3]
         else:
-            event_parts['intron2'].append(f"{int(parts[3].split('-')[0])}-{int(parts[3].split('-')[0]) + 1024}")
+            intron2 = f"{int(parts[3].split('-')[0])}-{int(parts[3].split('-')[0]) + 1024}"
+
+        if parts[4] == '+': # strand
+            event_parts['intron1'].append(intron1)
+            event_parts['intron2'].append(intron2)
+        else: # flip it for negative strand
+            event_parts['intron1'].append(intron2)
+            event_parts['intron2'].append(intron1)
 
         # exon_len = int(parts[3].split('-')[0]) - int(parts[2].split('-')[1])
     return pd.DataFrame(event_parts)
@@ -71,7 +78,6 @@ def create_bed_file(events, output_file):
 
             intron2_start, intron2_end = row['intron2'].split("-") 
             f.write(f"{row['chr']}\t{intron2_start}\t{intron2_end}\tintron2|{row['event_id']}\t0\t{row['strand']}\n")
-
 
     print(f"BED file created at {output_file}")
 
