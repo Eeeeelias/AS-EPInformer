@@ -208,17 +208,18 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
         for data in tqdm(trainloader, bar_format='{desc:<8}{percentage:3.0f}%|{bar:20}{r_bar}', desc=f'Epoch {epoch + 1}'):
             # print(inputs.size())
             optimizer.zero_grad()
-            input_pe, input_ex, p_input_hist, input_pe_feat, input_cell, y_expr, y_psi, _ = data
-            input_pe = input_pe.float().to(device)
-            input_ex = input_ex.float().to(device)
-            p_input_hist = p_input_hist.float().to(device)
-            input_pe_feat = input_pe_feat.float().to(device)
-            input_cell = input_cell.float().to(device)
 
-            y_expr = y_expr.float().to(device)
-            y_psi = y_psi.float().to(device)
+            input_pe = data['pe_seq'].float().to(device)
+            input_ex = data['segment_seq'].float().to(device)
+            p_input_hist = data['histone_features'].float().to(device)
+            input_pe_feat = data['pe_feat'].float().to(device)
+            input_epigen_marks = data['epigen_seq'].float().to(device)
+            input_cell = data['cell'].float().to(device)
 
-            pred_expr, _, pred_splice, _ = net(input_pe, input_ex, p_input_hist, input_pe_feat, input_cell)
+            y_expr = data['expr'].float().to(device)
+            y_psi = data['psi'].float().to(device)
+
+            pred_expr, _, pred_splice, _ = net(input_pe, input_ex, p_input_hist, input_epigen_marks, input_pe_feat, input_cell)
 
             loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
             loss_splice = L_splice(pred_splice, y_psi.reshape(pred_splice.shape))
@@ -291,20 +292,18 @@ def validate(net, valid_ds, batch_size=16, device = 'cuda', predict='multi', los
         expression_loss = 0
         splice_loss = 0
         for data in validloader:
-            # print(inputs.size())
-            input_pe, input_seg, input_feat, input_dist, input_cell, y_expr, y_psi, _ = data
-            input_pe = input_pe.float().to(device)
-            input_seg = input_seg.float().to(device)
-            input_feat = input_feat.float().to(device)
-            input_cell = input_cell.float().to(device)
-            # input_dist = input_dist.long().to(device)
-            input_dist = input_dist.float().to(device)
-            # print(input_dist.shape, input_dist)
-            # input_PEmask = ~(input_PE.sum(-1).sum(-1) > 0).bool().to(device)
-            y_expr = y_expr.float().to(device)
-            y_psi = y_psi.float().to(device)
+            
+            input_pe = data['pe_seq'].float().to(device)
+            input_seg = data['segment_seq'].float().to(device)
+            input_feat = data['histone_features'].float().to(device)
+            epigen_feat = data['epigen_seq'].float().to(device)
+            input_cell = data['cell'].float().to(device)
+            input_dist = data['pe_feat'].float().to(device)
+
+            y_expr = data['expr'].float().to(device)
+            y_psi = data['psi'].float().to(device)
             # print(input_P.shape, input_E.shape, input_Emask.shape)
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
+            pred_expr, _, pred_splice, _ = net(input_pe, input_seg, input_feat, epigen_feat, input_dist, input_cell)
 
             outputs = list(pred_expr.flatten().cpu().detach().numpy())
             labels = list(y_expr.flatten().cpu().detach().numpy())
@@ -396,16 +395,18 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
 
         ensid_list = []
         for data in tqdm(testloader):
-            input_pe, input_seg, input_feat, input_dist, input_cell, y_expr, y_psi, eid = data
-            input_pe = input_pe.float().to(device)
-            input_seg = input_seg.float().to(device)
-            input_feat = input_feat.float().to(device)
-            input_cell = input_cell.float().to(device)
-            # input_dist = input_dist.long().to(device)
-            input_dist = input_dist.float().to(device)
-            y_expr = y_expr.float().to(device)
-            y_psi = y_psi.float().to(device)
-            pred_expr, pred_splice_binary, pred_splice, _ = net(input_pe, input_seg, input_feat, input_dist, input_cell)
+
+            input_pe = data['pe_seq'].float().to(device)
+            input_seg = data['segment_seq'].float().to(device)
+            input_feat = data['histone_features'].float().to(device)
+            input_cell = data['cell'].float().to(device)
+            input_epigen_marks = data['epigen_seq'].float().to(device)
+            input_dist = data['pe_feat'].float().to(device)
+
+            y_expr = data['expr'].float().to(device)
+            y_psi = data['psi'].float().to(device)
+            eid = data['sample']
+            pred_expr, _, pred_splice, _ = net(input_pe, input_seg, input_feat, input_epigen_marks, input_dist, input_cell)
 
             if normals:
                 uncorr_pred_ep = pred_expr.clone()

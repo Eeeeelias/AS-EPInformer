@@ -128,6 +128,7 @@ for fi in fold_list:
                         'hic_threshold': hic_threshold,
                         'distance_threshold': distance_threshold,
                         'include_exons': config.optim.include_exons,
+                        'epigen_bp': config.optim.epigen_bp_level,
                         'include_enhancers': config.optim.enhancer_histones,
                         'rna_seq_source': config.optim.rna_seq_source,
                         'tpm_level': config.optim.tpm_level,
@@ -170,14 +171,17 @@ for fi in fold_list:
 
     model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=encoder, n_enhancer=n_enhancers, base_size=4,
                             out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=config.optim.include_exons, 
-                            separate_attention=True, use_histones=config.optim.enhancer_histones, 
-                            name_add=config.base.name, junctions=config.optim.junction_length > 0).to(device)
+                            epigen_bp=config.optim.epigen_bp_level, separate_attention=True, 
+                            use_histones=config.optim.enhancer_histones, name_add=config.base.name, 
+                            junctions=config.optim.junction_length > 0).to(device)
 
     if config.optim.learn_loss_weights:
         print("Learning loss weights for the splicing and expression tasks.")
         weighted_loss = WeightedLoss().to(device)
     else:
         weighted_loss = None
+
+    print(f"Number of trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
 
     model = model.to(device)
     model.name = model.name.replace('EPInformerV2', config.base.model_type) + '.' +  cell + '.' + expr_type
