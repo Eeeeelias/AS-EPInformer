@@ -234,7 +234,8 @@ class EPInformer_v2(nn.Module):
             self.exon_attn_mask = self.attn_mask
 
         if self.use_epigen_bp:
-            self.epigen_mask = self.epigen_attention_mask()
+            self.epigen_mask_1 = self.epigen_attention_mask(is_one=True)
+            self.epigen_mask_2 = self.epigen_attention_mask(is_one=False)
 
         if self.useBN: # use batch norm
             self.conv_out = nn.Sequential(
@@ -328,7 +329,7 @@ class EPInformer_v2(nn.Module):
         )
 
         self.pToSpliceBinary = nn.Sequential(
-            nn.Linear(self.out_dim+feat_n + 64*2, 128),
+            nn.Linear(self.out_dim+feat_n + 256*2, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -337,7 +338,7 @@ class EPInformer_v2(nn.Module):
 
         if self.use_epigen_bp:
             self.pToSplice = nn.Sequential(
-                nn.Linear(self.out_dim+feat_n+64*2, 128),
+                nn.Linear(self.out_dim+feat_n+256*2, 128), # usually: 64 for the first token only
                 nn.ReLU(),
                 nn.Linear(128, 64),
                 nn.ReLU(),
@@ -392,9 +393,18 @@ class EPInformer_v2(nn.Module):
         attn_mask.masked_fill(attn_mask, float('-inf'))
         return attn_mask
     
-    def epigen_attention_mask(self):
+    def epigen_attention_mask(self, is_one=False):
         attn_mask = (~np.identity(4).astype(bool))
-        attn_mask[:, :] = False
+        if is_one:
+            attn_mask[:, 0] = False
+            attn_mask[0, :] = False
+            attn_mask[:, 2] = False
+            attn_mask[2, :] = False
+        else:
+            attn_mask[:, 1] = False
+            attn_mask[1, :] = False
+            attn_mask[:, 3] = False
+            attn_mask[3, :] = False
         attn_mask = torch.from_numpy(attn_mask)
         attn_mask.masked_fill(attn_mask, float('-inf'))
         return attn_mask
@@ -460,11 +470,14 @@ class EPInformer_v2(nn.Module):
             epigen_j1 = torch.cat([epigen_flatten, junction_embed], dim=1) # [16, 4, 64]
             epigen_j2 = torch.cat([epigen_flatten, junction_embed], dim=1)
             epigen_flat_emb_j1, attn = self.attn_encoder[-2](epigen_j1, enhancers_padding_mask=epigen_padding_mask,
-                                                          attn_mask=self.epigen_mask.to(self.device))
+                                                          attn_mask=self.epigen_mask_1.to(self.device))
             epigen_flat_emb_j2, attn = self.attn_encoder[-1](epigen_j2, enhancers_padding_mask=epigen_padding_mask,
-                                                            attn_mask=self.epigen_mask.to(self.device))
-            epigen_flat_emb_j1 = torch.flatten(epigen_flat_emb_j1[:, 0, :], start_dim=1)
-            epigen_flat_emb_j2 = torch.flatten(epigen_flat_emb_j2[:, 0, :], start_dim=1)
+                                                            attn_mask=self.epigen_mask_2.to(self.device))
+            
+            #epigen_flat_emb_j1 = torch.flatten(epigen_flat_emb_j1[:, 0, :], start_dim=1)
+            #epigen_flat_emb_j2 = torch.flatten(epigen_flat_emb_j2[:, 0, :], start_dim=1)
+            epigen_flat_emb_j1 = torch.flatten(epigen_flat_emb_j1, start_dim=1)
+            epigen_flat_emb_j2 = torch.flatten(epigen_flat_emb_j2, start_dim=1)
 
 
         p_embed_expr = torch.flatten(pe_flatten_embed_expr[:,0,:], start_dim=1)
