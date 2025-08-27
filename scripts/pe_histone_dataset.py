@@ -154,7 +154,7 @@ class PEHistoneDataset(Dataset):
         enhancer_data = {key: data_h5[key][idx,:] for key in histone_marks if key in data_h5}
         enhancer_intensity = enhancer_data.pop('H3K27ac', None)
         enhancer_histones = np.stack([x for x in enhancer_data.values()], axis=-1)
-        enhancer_epigen_tensor = None
+        enhancer_epigen_tensor = torch.Tensor([])
         if self.use_enhancer_bp:
             enhancer_epigen = [self.data_dict[f"{curr_cell_type}_bp"][x][idx] for x in histone_marks]
             enhancer_epigen = np.concatenate(enhancer_epigen, axis=-1)

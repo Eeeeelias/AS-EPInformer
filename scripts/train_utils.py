@@ -9,7 +9,7 @@ from torch import nn
 import torch.utils.data as data_utils
 from torch.utils.data import Subset
 from torch.nn.utils import parameters_to_vector
-from torch.nn.functional import cosine_similarity
+from torch.nn.functional import cosine_similarity, pad
 from torchviz import make_dot
 
 from denseweight import DenseWeight
@@ -18,7 +18,7 @@ from scipy import stats
 from sklearn.metrics import mean_squared_error, r2_score, roc_auc_score, f1_score, accuracy_score
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
-#
+import math
 #from softadapt import LossWeightedSoftAdapt
 
 
@@ -130,7 +130,7 @@ def setup_loss_file(saved_model_path):
     return loss_file
 
 
-def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, 
+def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-7, model_logger=None, 
           fixed_encoder = False, n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, 
           device = 'cuda', stratify=None, epochs=100, valid_size=1000, predict='multi', loss_class=None, 
           weigh_samples=False, expr_loss_type='mse', splice_loss_type='bce'):
@@ -231,9 +231,11 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
                 loss_splice = dense_loss(pred_splice, y_psi.reshape(pred_splice.shape), dw, loss_fn=L_splice)
 
             loss = combine_losses(loss_expr, loss_splice, predict_type=predict, weights=loss_weights)
-            if not os.path.exists("images/graph.png"):
+
+            if not os.path.exists("images/final_graph.png"):
                 print("Creating computation graph for the first time")
-                make_dot(loss, params=dict(net.named_parameters())).render("images/graph", format="png")
+                make_dot(loss, params=dict(net.named_parameters())).render("images/final_graph", format="png")
+            
             # propagate the loss backward
             loss.backward()
             # update the gradients
