@@ -180,8 +180,8 @@ class MHAttention_encoderLayer_noLN(nn.Module):
 class EPInformer_v2(nn.Module):
     def __init__(self, base_size = 4, n_encoder=3, out_dim=128, head = 4, pre_trained_encoder= None, n_enhancer=50, 
                  device='cuda', useBN=True, usePromoterSignal=True, useFeat=True, n_extraFeat=0, useLN=True, 
-                 exon_data=False, epigen_bp=False, separate_attention=False, use_histones=False, name_add=None, 
-                 junctions=False):
+                 exon_data=False, epigen_bp=False, en_epigen_bp=False, separate_attention=False, use_histones=False, 
+                 name_add=None, junctions=False):
         super(EPInformer_v2, self).__init__()
         self.n_enhancer = n_enhancer
         self.out_dim = out_dim
@@ -196,6 +196,7 @@ class EPInformer_v2(nn.Module):
         self.device = device
         self.use_exon_data = exon_data
         self.use_epigen_bp = epigen_bp
+        self.use_en_epigen_bp = en_epigen_bp
         self.separate_attention = separate_attention
         self.histone_dim = 5 if use_histones else 0
 
@@ -218,7 +219,16 @@ class EPInformer_v2(nn.Module):
         if self.use_epigen_bp:
             self.epigen_encoder = seq_256bp_encoder_small(base_size=7)
 
+        if self.use_en_epigen_bp:
+            self.en_epigen_encoder = seq_256bp_encoder(base_size=7)
+
         attn_encs = self.n_encoder if not self.use_epigen_bp else self.n_encoder+2
+        attn_encs = self.n_encoder
+        if self.use_epigen_bp:
+            attn_encs += 2
+        if self.use_en_epigen_bp:
+            attn_encs += 1
+
         if useLN: # use layer norm
             self.attn_encoder = get_clones(MHAttention_encoderLayer(d_model=out_dim, nhead=head), attn_encs)
         else:
@@ -236,6 +246,9 @@ class EPInformer_v2(nn.Module):
         if self.use_epigen_bp:
             self.epigen_mask_1 = self.epigen_attention_mask(is_one=True)
             self.epigen_mask_2 = self.epigen_attention_mask(is_one=False)
+
+        if self.use_en_epigen_bp:
+            self.en_epigen_mask = self.enhancer_attention_mask()
 
         if self.useBN: # use batch norm
             self.conv_out = nn.Sequential(
@@ -287,7 +300,22 @@ class EPInformer_v2(nn.Module):
                 nn.Linear(1 if self.junctions else 40, int(self.out_dim/32)), # added 40 to account for the event length
                 nn.ELU(),
             )
-            
+            self.en_epigen_conv_out = nn.Sequential(
+                nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
+                nn.BatchNorm2d(64),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 4)),
+                nn.BatchNorm2d(64),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 6)),
+                nn.BatchNorm2d(64),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=32, kernel_size=(1, 1)),
+                nn.BatchNorm2d(32),
+                nn.ELU(),
+                nn.Linear(101, int(self.out_dim/32)), 
+            )
+
         else:
             self.conv_out = nn.Sequential(
                 nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
@@ -321,7 +349,7 @@ class EPInformer_v2(nn.Module):
             feat_n = 0
 
         self.pToExpr = nn.Sequential(
-            nn.Linear(self.out_dim+feat_n, 128),
+            nn.Linear(self.out_dim+feat_n+64, 128), # currently: +64 because we use bp histone enhancer marks
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
@@ -329,7 +357,7 @@ class EPInformer_v2(nn.Module):
         )
 
         self.pToSpliceBinary = nn.Sequential(
-            nn.Linear(self.out_dim+feat_n + 256*2, 128),
+            nn.Linear(self.out_dim+feat_n + 256*2 + 64, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -338,7 +366,7 @@ class EPInformer_v2(nn.Module):
 
         if self.use_epigen_bp:
             self.pToSplice = nn.Sequential(
-                nn.Linear(self.out_dim+feat_n+256*2, 128), # usually: 64 for the first token only
+                nn.Linear(self.out_dim+feat_n+256*2 + 64, 128), # usually: 64 for the first token only
                 nn.ReLU(),
                 nn.Linear(128, 64),
                 nn.ReLU(),
@@ -378,6 +406,13 @@ class EPInformer_v2(nn.Module):
         attn_mask.masked_fill(attn_mask, float('-inf'))
         return attn_mask
 
+    def enhancer_attention_mask(self):
+        # creates attention mask that allows only the enhancer tokens to attend and be attended to
+        attn_mask = (~np.identity(self.n_enhancer*2).astype(bool))
+        attn_mask = torch.from_numpy(attn_mask)
+        attn_mask.masked_fill(attn_mask, float('-inf'))
+        return attn_mask
+
     def exon_attention_mask(self, additional_dim=4, n_attend_last=3):
         # attend to the last three tokens (intron, exon, intron sequence) and nothing else
         # assert additional_dim >= 4, "additional_dim must be at least 4 for exon attention mask"
@@ -409,37 +444,48 @@ class EPInformer_v2(nn.Module):
         attn_mask.masked_fill(attn_mask, float('-inf'))
         return attn_mask
 
-    def forward(self, pe_seq, exon_seq, hist_feat=None, epigen_feat=None, extraFeat=None, cell_line=None):
+    def forward(self, pe_seq, exon_seq, hist_feat=None, ev_epigen_feat=None, en_epigen_feat=None, 
+                extraFeat=None, cell_line=None):
         # if enhancers_padding_mask is None:
         enhancers_padding_mask = ~(pe_seq.sum(-1).sum(-1) > 0).bool()
         enhancers_padding_mask[:, 0] = False # keep this only for ablation study where pe_seq is zeroed out
         if self.use_exon_data:
             exon_padding_mask = ~(exon_seq.sum(-1).sum(-1) > 0).bool() # added padding mask for event and combined
             enhancers_padding_mask = torch.concat([enhancers_padding_mask, exon_padding_mask], dim=1)
-            # do not pad the last three sequences (intron, exon, intron) in the exon_seq
-            enhancers_enhanced_padding_mask = enhancers_padding_mask.clone()
-            #enhancers_enhanced_padding_mask[:, -3:] = False
         
+        # encode the event epigenetic features
         epigen_padding_mask = None
         epigen_flatten = None
-        if epigen_feat is not None and self.use_epigen_bp:
-            epigen_padding_mask = ~(epigen_feat.sum(-1).sum(-1) > 0).bool()
+        if ev_epigen_feat is not None and self.use_epigen_bp:
+            epigen_padding_mask = ~(ev_epigen_feat.sum(-1).sum(-1) > 0).bool()
             epigen_padding_mask = torch.concat([epigen_padding_mask, exon_padding_mask], dim=1)
-            epigen_embed = self.epigen_encoder(epigen_feat)
+            epigen_embed = self.epigen_encoder(ev_epigen_feat)
             epigen_embed = self.epigen_conv_out(epigen_embed)
             epigen_flatten = torch.flatten(epigen_embed.permute(0, 2, 1, 3), start_dim=2)
+
+        # encode the enhancer epigenetic features
+        en_epigen_pad_mask = None
+        en_epigen_flatten = None
+        if en_epigen_feat is not None and self.use_en_epigen_bp:
+            en_epigen_pad_mask = ~(en_epigen_feat.sum(-1).sum(-1) > 0).bool()
+            en_epigen_pad_mask = torch.concat([en_epigen_pad_mask, enhancers_padding_mask[:,1:-2]], dim=1)
+            en_epigen_embed = self.en_epigen_encoder(en_epigen_feat)
+            en_epigen_embed = self.en_epigen_conv_out(en_epigen_embed)
+            en_epigen_flatten = torch.flatten(en_epigen_embed.permute(0, 2, 1, 3), start_dim=2)
 
         # encoding layer
         pe_embed = self.seq_encoder(pe_seq)
         pe_embed = self.conv_out(pe_embed)
         pe_flatten_embed = torch.flatten(pe_embed.permute(0, 2, 1, 3), start_dim=2)
 
+        # encode the event information
         if self.use_exon_data:
             exon_embed = self.event_encoder(exon_seq)
             exon_embed = self.event_conv_out(exon_embed)        
             exon_flatten_embed = torch.flatten(exon_embed.permute(0, 2, 1, 3), start_dim=2)
             pe_flatten_embed = torch.concat([pe_flatten_embed, exon_flatten_embed], dim=1)
 
+        # add and pad the extra features (histone features)
         if extraFeat is not None:
             # fill extraFeat with zeros on dim 1 because we have no promoter signal there
             if self.use_exon_data and extraFeat.shape[1] != pe_flatten_embed.shape[1]:
@@ -448,7 +494,7 @@ class EPInformer_v2(nn.Module):
             pe_flatten_embed = self.add_pos_conv(torch.concat([pe_flatten_embed, extraFeat], axis=-1)
                                                  .permute(0,2,1)).permute(0,2,1)
 
-        # attention layers
+        ##  attention layers
         attn_list = []
         # split self.n_encode in half (e.g. if n_encoder=6 then first 3 layers are for enhancers and last 3 layers for event seqs)
         n_encoder_half = self.n_encoder // 2
@@ -463,15 +509,16 @@ class EPInformer_v2(nn.Module):
                                                                     attn_mask=self.exon_attn_mask.to(self.device))
             attn_list.append(attn.unsqueeze(0))
 
-        if self.use_epigen_bp and epigen_feat is not None:
+        # attend the epigenetic features with the event junctions
+        if self.use_epigen_bp and ev_epigen_feat is not None:
             # take last two entries from shape [16, 63, 64] -> [16, 2, 64]
             junction_embed = pe_flatten_embed[:, -2:, :]
 
             epigen_j1 = torch.cat([epigen_flatten, junction_embed], dim=1) # [16, 4, 64]
             epigen_j2 = torch.cat([epigen_flatten, junction_embed], dim=1)
-            epigen_flat_emb_j1, attn = self.attn_encoder[-2](epigen_j1, enhancers_padding_mask=epigen_padding_mask,
+            epigen_flat_emb_j1, attn = self.attn_encoder[-1](epigen_j1, enhancers_padding_mask=epigen_padding_mask,
                                                           attn_mask=self.epigen_mask_1.to(self.device))
-            epigen_flat_emb_j2, attn = self.attn_encoder[-1](epigen_j2, enhancers_padding_mask=epigen_padding_mask,
+            epigen_flat_emb_j2, attn = self.attn_encoder[-2](epigen_j2, enhancers_padding_mask=epigen_padding_mask,
                                                             attn_mask=self.epigen_mask_2.to(self.device))
             
             #epigen_flat_emb_j1 = torch.flatten(epigen_flat_emb_j1[:, 0, :], start_dim=1)
@@ -479,9 +526,23 @@ class EPInformer_v2(nn.Module):
             epigen_flat_emb_j1 = torch.flatten(epigen_flat_emb_j1, start_dim=1)
             epigen_flat_emb_j2 = torch.flatten(epigen_flat_emb_j2, start_dim=1)
 
+        # attend the enhancers with their epigenetic data
+        if self.use_en_epigen_bp and en_epigen_feat is not None:
+            enhancer_embed = pe_flatten_embed[:,1:-2, :] # shape [16, 60, 64]
+            enhancer_flat_emb = torch.cat([enhancer_embed, en_epigen_flatten], dim=1) # shape [16, 120?, 64]
+            enhancer_flat_emb, attn = self.attn_encoder[-3](enhancer_flat_emb, enhancers_padding_mask=en_epigen_pad_mask,
+                                                        attn_mask=self.en_epigen_mask.to(self.device))
+            enhancer_flat_emb = torch.flatten(enhancer_flat_emb[:, 0, :], start_dim=1) # shape [16, 64]
 
+
+        # split into expression and splicing
         p_embed_expr = torch.flatten(pe_flatten_embed_expr[:,0,:], start_dim=1)
         p_embed_splice = torch.flatten(pe_flatten_embed_splice[:,0,:], start_dim=1)
+
+        # concat with enhancer data
+        if self.use_en_epigen_bp and en_epigen_feat is not None:
+            p_embed_expr = torch.cat([p_embed_expr, enhancer_flat_emb], dim=-1)
+            p_embed_splice = torch.cat([p_embed_splice, enhancer_flat_emb], dim=-1)
 
         # concat with RNA data (+ promoter)
         if self.useFeat:
@@ -490,9 +551,10 @@ class EPInformer_v2(nn.Module):
                 pass
                 # rna_feat = torch.cat([cell_line, rna_feat[..., 3:]], dim=-1)
             
-            p_embed_expr = torch.cat([p_embed_expr, hist_feat], dim=-1) 
+            p_embed_expr = torch.cat([p_embed_expr, hist_feat], dim=-1)
             p_embed_splice = torch.cat([p_embed_splice, hist_feat], dim=-1)
 
+        # add the epigenetic features of the event
         if self.use_epigen_bp:
             p_embed_splice = torch.cat([p_embed_splice, epigen_flat_emb_j1, epigen_flat_emb_j2], dim=-1)
 

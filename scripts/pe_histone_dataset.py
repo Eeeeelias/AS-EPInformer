@@ -15,7 +15,7 @@ class PEHistoneDataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
                  rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False,
-                 epigen_bp=False, include_enhancers=True, use_junctions=False, junction_length=250,
+                 epigen_bp=False, enhancer_bp=False, include_enhancers=True, use_junctions=False, junction_length=250,
                  set_exon_zero=False, set_pe_zero=False, set_histones_zero=False, set_extra_feat_zero=False, 
                  set_promoter_zero=False, remove_ar=False, one_tpm_ar=False, **kwargs):
         self.expr_type = expr_type
@@ -32,6 +32,7 @@ class PEHistoneDataset(Dataset):
         self.filter_for_event_genes = event_genes
         self.include_exons = include_exons
         self.use_epigen_bp = epigen_bp
+        self.use_enhancer_bp = enhancer_bp
         self.include_enhancers = include_enhancers
         self.include_exon_enhancers = include_enhancers
         self.one_tpm_ar = one_tpm_ar
@@ -76,6 +77,8 @@ class PEHistoneDataset(Dataset):
 
         self.data_dict['K562'] = h5py.File(self.data_folder + '/K562_histone_appended_pe_encoding.h5', 'r')
         self.data_dict['GM12878'] = h5py.File(self.data_folder + '/GM12878_histone_appended_pe_encoding.h5', 'r')
+        self.data_dict['K562_bp'] = h5py.File(self.data_folder + '/K562_histone_enhancer_marks.h5', 'r')
+        self.data_dict['GM12878_bp'] = h5py.File(self.data_folder + '/GM12878_histone_enhancer_marks.h5', 'r')
 
         self.expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18377_gene_expr_fromXpresso.csv', index_col='ENSID')
         self.present_genes = self.expr_df.index
@@ -151,6 +154,11 @@ class PEHistoneDataset(Dataset):
         enhancer_data = {key: data_h5[key][idx,:] for key in histone_marks if key in data_h5}
         enhancer_intensity = enhancer_data.pop('H3K27ac', None)
         enhancer_histones = np.stack([x for x in enhancer_data.values()], axis=-1)
+        enhancer_epigen_tensor = None
+        if self.use_enhancer_bp:
+            enhancer_epigen = [self.data_dict[f"{curr_cell_type}_bp"][x][idx] for x in histone_marks]
+            enhancer_epigen = np.concatenate(enhancer_epigen, axis=-1)
+            enhancer_epigen_tensor = torch.from_numpy(enhancer_epigen[1:])
 
         # added exon & intron sequences
         segment_tensor = torch.Tensor([])
@@ -273,8 +281,8 @@ class PEHistoneDataset(Dataset):
             assert False, 'Label does not exist!'
 
         return {'pe_seq': pe_code_tensor, 'segment_seq': segment_tensor, 'histone_features': histone_features_tensor,
-                'epigen_seq': bp_epigen_marks, 'pe_feat': pe_feat_tensor, 'cell': cell_tensor, 'expr': expr_tensor,
-                'psi': psi_tensor, 'sample': sample_ensid}
+                'ev_epigen_seq': bp_epigen_marks, 'en_epigen_seq': enhancer_epigen_tensor, 'pe_feat': pe_feat_tensor, 
+                'cell': cell_tensor, 'expr': expr_tensor, 'psi': psi_tensor, 'sample': sample_ensid}
 
 
 

@@ -129,6 +129,7 @@ for fi in fold_list:
                         'distance_threshold': distance_threshold,
                         'include_exons': config.optim.include_exons,
                         'epigen_bp': config.optim.epigen_bp_level,
+                        'enhancer_bp': config.optim.en_epigen_bp_level,
                         'include_enhancers': config.optim.enhancer_histones,
                         'rna_seq_source': config.optim.rna_seq_source,
                         'tpm_level': config.optim.tpm_level,
@@ -171,9 +172,9 @@ for fi in fold_list:
 
     model = EPInformer_v2(n_encoder=n_encoder, pre_trained_encoder=encoder, n_enhancer=n_enhancers, base_size=4,
                             out_dim=64, n_extraFeat=n_extraFeat, device=device, exon_data=config.optim.include_exons, 
-                            epigen_bp=config.optim.epigen_bp_level, separate_attention=True, 
-                            use_histones=config.optim.enhancer_histones, name_add=config.base.name, 
-                            junctions=config.optim.junction_length > 0).to(device)
+                            epigen_bp=config.optim.epigen_bp_level, en_epigen_bp=config.optim.en_epigen_bp_level,
+                            separate_attention=True, use_histones=config.optim.enhancer_histones,
+                            name_add=config.base.name, junctions=config.optim.junction_length > 0).to(device)
 
     if config.optim.learn_loss_weights:
         print("Learning loss weights for the splicing and expression tasks.")
