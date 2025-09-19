@@ -106,6 +106,8 @@ if config.debug.short_run:
 split_df = pd.read_csv('./data/leave_chrom_out_crossvalidation_split_18377genes.csv', index_col=0)
 
 
+split_idx = {}
+
 for fi in fold_list:
     print("-"*10, 'fold', fi, '-'*10)
     fold_i = 'fold_' + str(fi)
@@ -151,6 +153,9 @@ for fi in fold_list:
         train_idx, valid_idx, test_idx = sp.create_set_indices(all_ds, train_ratio=0.8, valid_ratio=0.1,
                                                             events=False, seed=42+int(fi), splits=split_df, fold_i=fold_i)
     
+
+    split_idx[fi] = {'train': train_idx, 'valid': valid_idx, 'test': test_idx}    
+
     normals = None
     if config.optim.z_score_normalise:
         normals = all_ds.z_score_normalize(train_idx)
@@ -196,3 +201,23 @@ for fi in fold_list:
 
     test_df = utils.test(model, test_ds, model_name = model.name, saved_model_path=saved_model_path, fold_i=fi, 
                          batch_size=batch_size, normals=normals, device=device, predict=config.base.expr_assay)
+
+
+if False:
+    # plot split distribution y = num samples per set, x = fold
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    fig = plt.figure(figsize=(10, 5))
+    set_names = ['train', 'valid', 'test']
+    set_counts = {set_name: [len(split_idx[fi][set_name]) for fi in fold_list] for set_name in set_names}
+    set_counts_df = pd.DataFrame(set_counts)
+    set_counts_df['Fold'] = fold_list
+    set_counts_df_melted = set_counts_df.melt(var_name='Set', value_name='Number of Samples', id_vars=['Fold'])
+    print(set_counts_df_melted.head())
+    sns.barplot(data=set_counts_df_melted, x='Fold', y='Number of Samples', hue='Set')
+    plt.xlabel('Fold')
+    plt.ylabel('Number of Samples')
+    plt.title('Distribution of Samples per Set Across Folds')
+    plt.legend(title='Set')
+    plt.tight_layout()
+    plt.savefig("images/split_distribution_per_fold.png")
