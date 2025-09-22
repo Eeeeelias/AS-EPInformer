@@ -14,7 +14,7 @@ except FileNotFoundError as e:
 
 
 
-def process_histone_signals(bed_file, existing_h5=None, proc_events=True, only_cell=None):
+def process_histone_signals(bed_file, promoter_bed_file=None, existing_h5=None, proc_events=True, only_cell=None):
     # need a dict that per tissue (cell line) holds a np array per histone signal
     dataset_dict = {cell: {} for cell in file_uuids[list(file_uuids.keys())[0]].keys()}
 
@@ -24,19 +24,21 @@ def process_histone_signals(bed_file, existing_h5=None, proc_events=True, only_c
                 print(f"Skipping {tissue}...")
                 continue
             bigwig_file = get_file_name(uuid)
-            print(f"Processing {histone_type} for {tissue} ({'events' if proc_events else 'enhancer'})...")
+            print(f"Processing {histone_type} for {tissue} ({'events' if proc_events else 'promoter/enhancer'})...")
             if proc_events:
                 hist_outs = extract_bp_histone_signals(bigwig_file, bed_file, proc_events, seq_len=1024)
                 hist_arr = combine_events(hist_outs)
             else:
                 hist_outs = extract_bp_histone_signals(bigwig_file, bed_file, proc_events, seq_len=2000)
-                hist_arr = combine_enhancers(hist_outs, existing_h5)
+                # promoters have same structure as events
+                hist_outs_prom = extract_bp_histone_signals(bigwig_file, promoter_bed_file, True, seq_len=2000)
+                hist_arr = combine_enhancers(hist_outs, hist_outs_prom, existing_h5)
             dataset_dict[tissue][histone_type] = hist_arr
 
     return dataset_dict
 
 
-def process_methylation_signal(bed_file, existing_h5=None, proc_events=True, only_cell=None, support=3):
+def process_methylation_signal(bed_file, promoter_bed_file=None, existing_h5=None, proc_events=True, only_cell=None, support=3):
     # for chrom, start, end, name, gene, _ in bed.itertuples(index=False, name=None): # gene colum only makes sense for enhancers
     methylation_base = "/nfs/data/IHEC/RNAseq/WGBS_matrices"
     if proc_events:
@@ -47,6 +49,8 @@ def process_methylation_signal(bed_file, existing_h5=None, proc_events=True, onl
         bed = pd.read_csv(bed_file, sep=',')
         all_chrom = set(bed['chrom'].values)
         sorted_bed = bed.sort_values(by=['chrom'])
+        promoter_bed = pd.read_csv(promoter_bed_file, sep='\t', header=None)
+        promoter_bed = promoter_bed.sort_values(by=[0])
     
     files = {chrom: os.path.join(methylation_base, f"{chrom}.meth{support}.csv.gz") for chrom in all_chrom}
 
@@ -59,8 +63,8 @@ def process_methylation_signal(bed_file, existing_h5=None, proc_events=True, onl
         if proc_events:
             meth_arr = combine_events(meth_outs)
         else: 
-            meth_arr = combine_enhancers(meth_outs, existing_h5)
-        print(meth_arr.shape)
+            meth_outs_prom = extract_bp_methylation_signal(promoter_bed, cell, files, True, seq_length=2000)
+            meth_arr = combine_enhancers(meth_outs, meth_outs_prom, existing_h5)
         dataset_dict[cell]['methylation'] = meth_arr
 
     return dataset_dict
@@ -78,7 +82,7 @@ def set_meth_data(meth_data, curr_chr, files):
     return meth_data, curr_chr
 
 
-def extract_bp_methylation_signal(bed, cell_line, files, proc_events):
+def extract_bp_methylation_signal(bed, cell_line, files, proc_events, seq_length=1024):
     dataset_dict = {} if proc_events else {x: {} for x in bed['gene_id'].unique()}
     meth_data, loaded_chr = set_meth_data(pd.DataFrame(), 'chr1', files)
 
@@ -94,7 +98,7 @@ def extract_bp_methylation_signal(bed, cell_line, files, proc_events):
             else:
                 arr.append(0)
         if proc_events:
-            arr = resize_seq(arr, length=1024)
+            arr = resize_seq(arr, length=seq_length)
             dataset_dict[name] = arr
         else:
             arr = resize_seq_center(arr, length=2000)
@@ -176,14 +180,16 @@ def combine_events(event_parts):
     return histone_arr
 
 
-def combine_enhancers(enhancer_parts, existing_h5):
+def combine_enhancers(enhancer_parts, promoter_parts, existing_h5):
     # I get a dictionary of enhancer parts i.e., {'gene1': {enhancer: [2000], 'gene2': {enhancer: [2000]}}}
     # and I need a np array per gene with the final shape of (n_genes, 61, 2000, 1) per histone mark
     gene_order = [x.decode() for x in existing_h5['gene_id']]
     full_arr = np.zeros((len(gene_order), 61, 2000, 1))
     for idx, gene in enumerate(gene_order):
         enhancers = enhancer_parts.get(gene, {})
+        promoter = promoter_parts.get(gene, np.zeros(2000)) # if no promoter, fill with zero
         gene_array = np.zeros((61, 2000, 1))
+        gene_array[0, :, 0] = promoter
         for _, values in enhancers.items():
             gene_array[1:len(values), :, 0] = values # start at idx to be consistent with orignal EPInformer
         full_arr[idx] = gene_array
@@ -206,7 +212,7 @@ def create_h5_dataset(h5_file, histone_arr, proc_events=True):
 
 
 if __name__ == "__main__":
-    process_events = True # if False, process enhancers
+    process_events = False # if False, process enhancers
     if process_events:
         bed_file = "../data/extracted_events.bed"
         h5_file = "../data/event_bp_histone_marks.h5"
@@ -216,23 +222,31 @@ if __name__ == "__main__":
         create_h5_dataset(h5_file, dataset_raw)
     else:
         # K562
-        k562_link_file = "../data/K562_gene_enhancer_links.csv"
+        k562_promoter_link_file = '/nfs/proj/EPInformer-AS/AS-Epinformer-Dup/data/K562_DNase_ENCFF257HEE_hic_' \
+                                  '4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/GeneList.TSS1kb.bed'
+        k562_enhancer_link_file = "../data/K562_gene_enhancer_links.csv"
         new_k562_h5 = "../data/K562_histone_enhancer_marks.h5"
         existing_k562_h5 = "../data/K562_histone_appended_pe_encoding.h5"
         existing_k562_h5 = h5.File(existing_k562_h5, "r")
-        dataset_meth = process_methylation_signal(k562_link_file, existing_h5=existing_k562_h5, proc_events=process_events, only_cell='K562')
-        dataset_hist = process_histone_signals(k562_link_file, existing_k562_h5, proc_events=process_events, only_cell='K562')
+        dataset_meth = process_methylation_signal(k562_enhancer_link_file, k562_promoter_link_file, 
+                                                  existing_h5=existing_k562_h5, proc_events=process_events, only_cell='K562')
+        dataset_hist = process_histone_signals(k562_enhancer_link_file, k562_promoter_link_file, existing_k562_h5, 
+                                               proc_events=process_events, only_cell='K562')
         dataset_raw = {cell: {**dataset_meth[cell], **dataset_hist[cell]} for cell in dataset_meth.keys()}
         create_h5_dataset(new_k562_h5, dataset_raw, proc_events=process_events)
         existing_k562_h5.close()
 
         # GM12878 repeat as above
+        gm12878_promoter_link_file = '/nfs/proj/EPInformer-AS/AS-Epinformer-Dup/data/GM12878_DNase_ENCFF020WZB_hic_' \
+                                     '4DNFI1UEG1HD_1MB_ABC_nominated/DNase_ENCFF020WZB_Neighborhoods/GeneList.TSS1kb.bed'
         gm12878_link_file = "../data/GM12878_gene_enhancer_links.csv"
         new_gm12878_h5 = "../data/GM12878_histone_enhancer_marks.h5"
         existing_gm12878_h5 = "../data/GM12878_histone_appended_pe_encoding.h5"
         existing_gm12878_h5 = h5.File(existing_gm12878_h5, "r")
-        dataset_meth = process_methylation_signal(gm12878_link_file, existing_h5=existing_gm12878_h5, proc_events=process_events, only_cell='GM12878')
-        dataset_hist = process_histone_signals(gm12878_link_file, existing_gm12878_h5, proc_events=process_events, only_cell='GM12878')
+        dataset_meth = process_methylation_signal(gm12878_link_file, gm12878_promoter_link_file, 
+                                                  existing_h5=existing_gm12878_h5, proc_events=process_events, only_cell='GM12878')
+        dataset_hist = process_histone_signals(gm12878_link_file, gm12878_promoter_link_file, existing_gm12878_h5, 
+                                               proc_events=process_events, only_cell='GM12878')
         dataset_raw = {cell: {**dataset_meth[cell], **dataset_hist[cell]} for cell in dataset_meth.keys()}
         create_h5_dataset(new_gm12878_h5, dataset_raw, proc_events=process_events)
         existing_gm12878_h5.close()

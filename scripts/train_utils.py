@@ -130,7 +130,7 @@ def setup_loss_file(saved_model_path):
     return loss_file
 
 
-def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-7, model_logger=None, 
+def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-5, model_logger=None, 
           fixed_encoder = False, n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, 
           device = 'cuda', stratify=None, epochs=100, valid_size=1000, predict='multi', loss_class=None, 
           weigh_samples=False, expr_loss_type='mse', splice_loss_type='bce'):
@@ -222,6 +222,9 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
 
             pred_expr, _, pred_splice, _ = net(input_pe, input_ex, p_input_hist, event_epigen_marks, 
                                                enhancer_epigen_marks, input_pe_feat, input_cell)
+
+            if torch.isnan(pred_expr).any() or torch.isnan(pred_splice).any():
+                raise ValueError("NaN detected in predictions")
 
             loss_expr = L_expr(pred_expr, y_expr.reshape(pred_expr.shape))
             loss_splice = L_splice(pred_splice, y_psi.reshape(pred_splice.shape))
