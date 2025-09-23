@@ -155,6 +155,7 @@ for fi in fold_list:
     
 
     split_idx[fi] = {'train': train_idx, 'valid': valid_idx, 'test': test_idx}    
+    continue
 
     normals = None
     if config.optim.z_score_normalise:
@@ -207,17 +208,40 @@ if False:
     # plot split distribution y = num samples per set, x = fold
     import seaborn as sns
     import matplotlib.pyplot as plt
-    fig = plt.figure(figsize=(10, 5))
+    sns.set_theme(style="whitegrid")
+
+    # --- Data prep ---
     set_names = ['train', 'valid', 'test']
-    set_counts = {set_name: [len(split_idx[fi][set_name]) for fi in fold_list] for set_name in set_names}
+    set_counts = {
+        set_name: [len(split_idx[fi][set_name]) for fi in fold_list]
+        for set_name in set_names
+    }
     set_counts_df = pd.DataFrame(set_counts)
     set_counts_df['Fold'] = fold_list
-    set_counts_df_melted = set_counts_df.melt(var_name='Set', value_name='Number of Samples', id_vars=['Fold'])
+    set_counts_df_melted = set_counts_df.melt(
+        var_name='Set', value_name='Number of Samples', id_vars=['Fold']
+    )
     print(set_counts_df_melted.head())
-    sns.barplot(data=set_counts_df_melted, x='Fold', y='Number of Samples', hue='Set')
-    plt.xlabel('Fold')
-    plt.ylabel('Number of Samples')
-    plt.title('Distribution of Samples per Set Across Folds')
-    plt.legend(title='Set')
+
+    # --- Figure ---
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    palette = sns.color_palette("Set2", n_colors=len(set_names))
+
+    sns.barplot(
+        data=set_counts_df_melted,
+        x='Fold', y='Number of Samples',
+        hue='Set',
+        ax=ax, palette=palette
+    )
+
+    ax.set_xlabel('Fold')
+    ax.set_ylabel('Number of Samples')
+    ax.set_title('Distribution of Samples per Set Across Folds', fontsize=12, weight="bold")
+
+    # Put legend outside if you want a cleaner plot
+    ax.legend(title='Set', bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+
     plt.tight_layout()
     plt.savefig("images/split_distribution_per_fold.png")
+    plt.show()
