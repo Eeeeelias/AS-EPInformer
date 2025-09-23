@@ -155,7 +155,6 @@ for fi in fold_list:
     
 
     split_idx[fi] = {'train': train_idx, 'valid': valid_idx, 'test': test_idx}    
-    continue
 
     normals = None
     if config.optim.z_score_normalise:
