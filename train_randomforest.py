@@ -18,7 +18,7 @@ import scripts.train_utils_binary as bin_utils
 import scripts.setup_utils as sp
 from EPInformer.models_multi import ASInformer, ASTransformer, ASLSTM, ASdCNNsmall
 from scripts.pe_utils import plot_loss_curve
-from sklearn.metrics import matthews_corrcoef, mean_squared_error, r2_score, roc_auc_score, balanced_accuracy_score
+from sklearn.metrics import matthews_corrcoef, mean_squared_error, r2_score, roc_auc_score, balanced_accuracy_score, f1_score
 from sklearn.ensemble import RandomForestClassifier
 
 
@@ -34,7 +34,9 @@ def filter_psi(X, y):
 def loader_to_numpy(loader):
     X_list, y_list = [], []
     for data in loader:
-        X, y, _ = data   # like your tuple structure
+        X, y, _ = data
+        print(X.shape)
+        break
         X_list.append(X.view(X.size(0), -1).numpy())  # flatten images/features
         y_list.append(y.numpy())
     X = np.concatenate(X_list, axis=0)
@@ -145,6 +147,10 @@ for fi in fold_list:
                         'n_enhancers': n_enhancers,
                         'hic_threshold': hic_threshold,
                         'distance_threshold': distance_threshold,
+                        'epigen_bp': config.optim.epigen_bp_level,
+                        'enhancer_bp': False,
+                        'use_junctions': False,
+                        'junction_length': 400,
                         'include_exons': config.optim.include_exons,
                         'include_enhancers': config.optim.enhancer_histones,
                         'rna_seq_source': config.optim.rna_seq_source,
@@ -164,7 +170,7 @@ for fi in fold_list:
     elif config.optim.include_exons:
         train_idx, valid_idx, test_idx = sp.split_binary(all_ds.event_keys, train_frac=0.8, val_frac=0.1,test_frac=0.1, 
                                                          seed=42+int(fi), short_run=config.debug.short_run, 
-                                                         split_simple=True)
+                                                         split_simple=False)
     else:
         train_idx, valid_idx, test_idx = sp.create_set_indices(all_ds, train_ratio=0.8, valid_ratio=0.1,
                                                             events=False, seed=42+int(fi), splits=split_df, fold_i=fold_i)
@@ -203,6 +209,8 @@ for fi in fold_list:
     test_acc = balanced_accuracy_score(y_test, test_preds)
     test_mcc = matthews_corrcoef(y_test, test_preds)
     test_auroc = roc_auc_score(y_test, test_preds)
+    test_f1 = f1_score(y_test, test_preds)
     print(f"Test accuracy: {test_acc:.4f}")
     print(f"Test MCC: {test_mcc:.4f}")
     print(f"Test AUROC: {test_auroc:.4f}")
+    print(f"Test F1: {test_f1:.4f}")
