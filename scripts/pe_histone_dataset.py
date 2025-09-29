@@ -158,7 +158,7 @@ class PEHistoneDataset(Dataset):
         if self.use_enhancer_bp:
             enhancer_epigen = [self.data_dict[f"{curr_cell_type}_bp"][x][idx] for x in histone_marks]
             enhancer_epigen = np.concatenate(enhancer_epigen, axis=-1)
-            enhancer_epigen_tensor = torch.from_numpy(enhancer_epigen[1:])
+            enhancer_epigen_tensor = torch.from_numpy(enhancer_epigen)
 
         # added exon & intron sequences
         segment_tensor = torch.Tensor([])
@@ -283,8 +283,7 @@ class PEHistoneDataset(Dataset):
         return {'pe_seq': pe_code_tensor, 'segment_seq': segment_tensor, 'histone_features': histone_features_tensor,
                 'ev_epigen_seq': bp_epigen_marks, 'en_epigen_seq': enhancer_epigen_tensor, 'pe_feat': pe_feat_tensor, 
                 'cell': cell_tensor, 'expr': expr_tensor, 'psi': psi_tensor, 'sample': sample_ensid}
-
-
+    
 
     def get_junctions(self, segment_tensor, bp_epigen_marks=None):
         ex_mask = (segment_tensor[1] == 0).all(dim=1)

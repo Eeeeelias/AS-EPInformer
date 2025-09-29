@@ -130,7 +130,7 @@ def setup_loss_file(saved_model_path):
     return loss_file
 
 
-def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-5, model_logger=None, 
+def train(net, training_dataset, fold_i, saved_model_path='../models', learning_rate=1e-4, model_logger=None, 
           fixed_encoder = False, n_enhancers = 50, valid_dataset = None, model_name = '', batch_size = 64, 
           device = 'cuda', stratify=None, epochs=100, valid_size=1000, predict='multi', loss_class=None, 
           weigh_samples=False, expr_loss_type='mse', splice_loss_type='bce'):
@@ -234,6 +234,8 @@ def train(net, training_dataset, fold_i, saved_model_path='../models', learning_
                 loss_splice = dense_loss(pred_splice, y_psi.reshape(pred_splice.shape), dw, loss_fn=L_splice)
 
             loss = combine_losses(loss_expr, loss_splice, predict_type=predict, weights=loss_weights)
+            if torch.isnan(loss):
+                raise ValueError("Found nans!!")
 
             if not os.path.exists("images/final_graph.png"):
                 print("Creating computation graph for the first time")

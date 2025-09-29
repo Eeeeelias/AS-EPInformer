@@ -360,7 +360,7 @@ class EPInformer_v2(nn.Module):
         )
 
         self.pToSpliceBinary = nn.Sequential(
-            nn.Linear(self.out_dim+feat_n + 256*2 + add_pred_dim, 128),
+            nn.Linear(self.out_dim+feat_n + 256*3 + add_pred_dim, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -369,7 +369,7 @@ class EPInformer_v2(nn.Module):
 
         if self.use_epigen_bp:
             self.pToSplice = nn.Sequential(
-                nn.Linear(self.out_dim+feat_n+256*2 + add_pred_dim, 128),
+                nn.Linear(self.out_dim+feat_n+256*3 + add_pred_dim, 128),
                 nn.ReLU(),
                 nn.Linear(128, 64),
                 nn.ReLU(),
@@ -411,10 +411,18 @@ class EPInformer_v2(nn.Module):
 
     def enhancer_attention_mask(self):
         # creates attention mask that allows only the enhancer tokens to attend and be attended to
-        attn_mask = (~np.identity(self.n_enhancer*2).astype(bool))
-        # set lower triangle to False
-        # attn_mask[np.tril_indices(attn_mask.shape[0], -1)] = False
-        attn_mask[:, :] = False
+        attn_mask = (~np.identity((self.n_enhancer+1)*2).astype(bool))
+        attn_mask[:, 0] = False
+        attn_mask[0, :] = False
+        attn_mask[:, self.n_enhancer+1:] = False
+        attn_mask[self.n_enhancer+1:, :] = False
+
+        # each i should be able to attend to i+n (i.e. enhancer sequence to its epigen features)
+        for i in range(self.n_enhancer+1):
+            attn_mask[i, i+self.n_enhancer+1] = False
+            attn_mask[i+self.n_enhancer+1, i] = False
+
+        # attn_mask[:, :] = False
         attn_mask = torch.from_numpy(attn_mask)
         attn_mask.masked_fill(attn_mask, float('-inf'))
         return attn_mask
@@ -435,7 +443,7 @@ class EPInformer_v2(nn.Module):
         return attn_mask
     
     def epigen_attention_mask(self, is_one=False):
-        attn_mask = (~np.identity(4).astype(bool))
+        attn_mask = (~np.identity(6).astype(bool))
         if is_one:
             attn_mask[:, 0] = False
             attn_mask[0, :] = False
@@ -446,6 +454,10 @@ class EPInformer_v2(nn.Module):
             attn_mask[1, :] = False
             attn_mask[:, 3] = False
             attn_mask[3, :] = False
+        attn_mask[:, 4] = False
+        attn_mask[4, :] = False
+        attn_mask[:, 5] = False
+        attn_mask[5, :] = False
         attn_mask = torch.from_numpy(attn_mask)
         attn_mask.masked_fill(attn_mask, float('-inf'))
         return attn_mask
@@ -469,7 +481,9 @@ class EPInformer_v2(nn.Module):
         epigen_flatten = None
         if ev_epigen_feat is not None and self.use_epigen_bp:
             epigen_padding_mask = ~(ev_epigen_feat.sum(-1).sum(-1) > 0).bool()
-            epigen_padding_mask = torch.concat([epigen_padding_mask, exon_padding_mask], dim=1)
+            epigen_padding_mask = torch.concat([epigen_padding_mask, exon_padding_mask], dim=1) # [16, 4]
+            # add enhancer to padding mask
+            epigen_padding_mask = torch.concat([epigen_padding_mask, torch.zeros(epigen_padding_mask.shape[0], 2).bool().to(self.device)], dim=1)
             epigen_embed = self.epigen_encoder(ev_epigen_feat)
             epigen_embed = self.epigen_conv_out(epigen_embed)
             epigen_flatten = torch.flatten(epigen_embed.permute(0, 2, 1, 3), start_dim=2)
@@ -478,9 +492,9 @@ class EPInformer_v2(nn.Module):
         en_epigen_pad_mask = None
         en_epigen_flatten = None
         if en_epigen_feat is not None and self.use_en_epigen_bp:
-            en_epigen_pad_mask = enhancers_padding_mask[:,1:-2] # have the same as the enhancer_padding_mask
-            en_epigen_pad_mask = torch.concat([en_epigen_pad_mask, enhancers_padding_mask[:,1:-2]], dim=1)
-            en_epigen_pad_mask[:, 0] = False # TODO: CHANGE, THIS MAKES NO SENSE BUT PREVENTS BUGS
+            en_epigen_pad_mask = enhancers_padding_mask[:,:-2]
+            en_epigen_pad_mask = torch.concat([en_epigen_pad_mask, enhancers_padding_mask[:,:-2]], dim=1)
+            en_epigen_pad_mask[:, 0] = False # promoter is never padded
             en_epigen_embed = self.en_epigen_encoder(en_epigen_feat)
             en_epigen_embed = self.en_epigen_conv_out(en_epigen_embed)
             en_epigen_flatten = torch.flatten(en_epigen_embed.permute(0, 2, 1, 3), start_dim=2)
@@ -520,9 +534,12 @@ class EPInformer_v2(nn.Module):
         if self.use_epigen_bp and ev_epigen_feat is not None:
             # take last two entries from shape [16, 63, 64] -> [16, 2, 64]
             junction_embed = pe_flatten_embed[:, -2:, :]
+            # take the promoter sequence as well
+            promoter_embed = pe_flatten_embed[:, 0, :].unsqueeze(1) # [16, 1, 64]
+            promoter_epigen = en_epigen_flatten[:, 0, :].unsqueeze(1)
 
-            epigen_j1 = torch.cat([epigen_flatten, junction_embed], dim=1) # [16, 4, 64]
-            epigen_j2 = torch.cat([epigen_flatten, junction_embed], dim=1)
+            epigen_j1 = torch.cat([epigen_flatten, junction_embed, promoter_embed, promoter_epigen], dim=1) # [16, 6, 64]
+            epigen_j2 = torch.cat([epigen_flatten, junction_embed, promoter_embed, promoter_epigen], dim=1)
             epigen_flat_emb_j1, attn = self.attn_encoder[-1](epigen_j1, enhancers_padding_mask=epigen_padding_mask,
                                                           attn_mask=self.epigen_mask_1)
             epigen_flat_emb_j2, attn = self.attn_encoder[-2](epigen_j2, enhancers_padding_mask=epigen_padding_mask,
@@ -535,8 +552,8 @@ class EPInformer_v2(nn.Module):
 
         # attend the enhancers with their epigenetic data
         if self.use_en_epigen_bp and en_epigen_feat is not None:
-            enhancer_embed = pe_flatten_embed[:,1:-2, :] # shape [16, 60, 64]
-            en_epigen_flat_emb = torch.cat([enhancer_embed, en_epigen_flatten], dim=1) # shape [16, 120, 64]
+            enhancer_embed = pe_flatten_embed[:,:-2, :] # shape [16, 61, 64]
+            en_epigen_flat_emb = torch.cat([enhancer_embed, en_epigen_flatten], dim=1) # shape [16, 122, 64]
             en_epigen_flat_emb, attn = self.attn_encoder[-3](en_epigen_flat_emb, enhancers_padding_mask=en_epigen_pad_mask,
                                                         attn_mask=self.en_epigen_mask)
             en_epigen_flat_emb = torch.flatten(en_epigen_flat_emb[:, 0, :], start_dim=1) # shape [16, 64]
