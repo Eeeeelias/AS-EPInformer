@@ -159,6 +159,11 @@ class PEHistoneDataset(Dataset):
             enhancer_epigen = [self.data_dict[f"{curr_cell_type}_bp"][x][idx] for x in histone_marks]
             enhancer_epigen = np.concatenate(enhancer_epigen, axis=-1)
             enhancer_epigen_tensor = torch.from_numpy(enhancer_epigen)
+            if torch.isnan(enhancer_epigen_tensor).any():
+                nas_count = torch.isnan(enhancer_epigen_tensor).sum().item()
+                print(f"Found: {nas_count} NAs, replacing with 0")
+                enhancer_epigen_tensor = torch.nan_to_num(enhancer_epigen_tensor, nan=0.0)
+
 
         # added exon & intron sequences
         segment_tensor = torch.Tensor([])
@@ -247,11 +252,7 @@ class PEHistoneDataset(Dataset):
         if self.zero_out_pe_data:
             pe_code_tensor = torch.zeros_like(pe_code_tensor)
         if self.zero_out_histone_data:
-            # replace everything but the promoter activity with zeros
-            if self.usePromoterSignal and self.n_extraFeat > 1:
-                histone_features_tensor[:-1] = 0
-            else:
-                histone_features_tensor = torch.zeros_like(histone_features_tensor)
+            histone_features_tensor = torch.zeros_like(histone_features_tensor)
         if self.zero_out_feat_data:
             pe_feat_tensor = torch.zeros_like(pe_feat_tensor)
         if self.zero_out_exons:
