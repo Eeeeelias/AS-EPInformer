@@ -1,5 +1,5 @@
 base:
-  cell: "K562"                          # options: K562, GM12878, both
+  cell: "both"                          # options: K562, GM12878, both
   fold: "1"                             # "all" or can also be "0,1,2" etc.
   model_type: "EPInformer-PE-Activity"  # options: EPInformer-PE, EPInformer-PE-Activity, EPInformer-PE-Activity-HiC
   distance_threshold: 100000
@@ -39,7 +39,7 @@ losses:
   splice_loss: "bce"                    # options: bce, smoothl1
 
 debug:
-  short_run: true
+  short_run: false
   set_exon_zero: false
   set_pe_zero: false
   set_rna_zero: false
