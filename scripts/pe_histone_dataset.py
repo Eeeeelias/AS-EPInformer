@@ -173,8 +173,8 @@ class PEHistoneDataset(Dataset):
             event_idx = np.where(self.gene_sequences['event_id'][:] == event.encode())[0][0]
             assert event == self.gene_sequences['event_id'][event_idx].decode(), "Event ID mismatch!"
             segment_tensor = torch.from_numpy(self.gene_sequences['event_seq'][event_idx])
-            event_histones = [self.gene_sequences[f"{x}_{self.cell_type}"][event_idx,:] for x in histone_marks 
-                              if f"{x}_{self.cell_type}" in self.gene_sequences]
+            event_histones = [self.gene_sequences[f"{x}_{curr_cell_type}"][event_idx,:] for x in histone_marks 
+                              if f"{x}_{curr_cell_type}" in self.gene_sequences]
             event_hist_tensor = torch.from_numpy(np.stack(event_histones, axis=-1))
             # add a zero tensor to emulate distance
             event_hist_tensor = torch.cat([torch.zeros((event_hist_tensor.shape[0], 1)), event_hist_tensor], dim=-1)
@@ -183,7 +183,7 @@ class PEHistoneDataset(Dataset):
         if self.use_epigen_bp:
             if not self.include_exons:
                 raise ValueError("Epigenetic data on base pair level can only be used when including exons.")
-            bp_epigen_marks = [self.event_histone_seqs[self.cell_type][x][event_idx] for x in histone_marks]
+            bp_epigen_marks = [self.event_histone_seqs[curr_cell_type][x][event_idx] for x in histone_marks]
             bp_epigen_marks = np.concatenate(bp_epigen_marks, axis=-1)
             bp_epigen_marks = torch.from_numpy(bp_epigen_marks)
 
