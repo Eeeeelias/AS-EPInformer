@@ -266,3 +266,111 @@ class WeightedLoss(nn.Module):
 
     def forward(self, loss):
         return loss * self.weight
+    
+
+class EPInformer_v1(nn.Module):
+    def __init__(self, base_size = 4, n_encoder=3, out_dim=128, head = 4, pre_trained_encoder= None, n_enhancer=50, device='cuda', useBN=True, usePromoterSignal=True, useFeat=True, n_extraFeat=0, useLN=True):
+        super(EPInformer_v1, self).__init__()
+        self.n_enhancer = n_enhancer
+        self.out_dim = out_dim
+        self.useFeat = useFeat
+        self.usePromoterSignal = usePromoterSignal
+        self.n_extraFeat = n_extraFeat
+        self.useBN = useBN
+        self.base_size = base_size
+        self.useLN = useLN
+        if pre_trained_encoder is not None:
+            self.seq_encoder = pre_trained_encoder
+            self.name = 'EPInformerV2.preTrainedConv.{}base.{}dim.{}Trans.{}head.{}BN.{}LN.{}Feat.{}extraFeat.{}enh'.format(base_size, out_dim, n_encoder, head, useBN, useLN, useFeat, n_extraFeat, n_enhancer) 
+        else:
+            self.seq_encoder = seq_256bp_encoder(base_size=base_size)
+            self.name = 'EPInformerV2.{}base.{}dim.{}Trans.{}head.{}BN.{}LN.{}Feat.{}extraFeat.{}enh'.format(base_size, out_dim, n_encoder, head, useBN,useLN, useFeat, n_extraFeat, n_enhancer)
+        self.n_encoder = n_encoder
+        self.device = device
+        if useLN:
+            self.attn_encoder = get_clones(MHAttention_encoderLayer(d_model=out_dim, nhead=head), self.n_encoder)
+        else:
+            self.attn_encoder = get_clones(MHAttention_encoderLayer_noLN(d_model=out_dim, nhead=head), self.n_encoder)
+        attn_mask = (~np.identity(self.n_enhancer+1).astype(bool))
+        attn_mask[:, 0] = False
+        attn_mask[0, :] = False
+        attn_mask = torch.from_numpy(attn_mask)
+        attn_mask.masked_fill(attn_mask, float('-inf'))
+        self.attn_mask = attn_mask
+        if self.useBN:
+            self.conv_out = nn.Sequential(
+                nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
+                nn.BatchNorm2d(64),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 4)),
+                nn.BatchNorm2d(64),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 6)),
+                nn.BatchNorm2d(64),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=32, kernel_size=(1, 1)),
+                nn.BatchNorm2d(32),
+                nn.ELU(),
+                nn.Linear(101, int(self.out_dim/32)), 
+                 # nn.Linear(38, 8), # 2kb nn.Linear(101, 8)
+                nn.ELU(),
+            )
+        else:
+            self.conv_out = nn.Sequential(
+                nn.Conv2d(in_channels = 128, out_channels=64, kernel_size=(1, 3), dilation=(1, 2)),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 4)),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=64, kernel_size=(1, 3), dilation=(1, 6)),
+                nn.ELU(),
+                nn.Conv2d(in_channels = 64, out_channels=32, kernel_size=(1, 1)),
+                nn.ELU(),
+                nn.Linear(101, int(self.out_dim/32)),
+                # nn.Linear(38, 8), # 2kb nn.Linear(101, 8)
+                nn.ELU(),
+            )
+        if self.useFeat:
+            if self.usePromoterSignal:
+                feat_n = 9
+            else:
+                feat_n = 8
+            self.pToExpr = nn.Sequential(
+                        nn.Linear(self.out_dim+feat_n, 128),
+                        nn.ReLU(),
+                        nn.Linear(128, 128),
+                        nn.ReLU(),
+                        nn.Linear(128, 1),
+                    )
+        else:
+            self.pToExpr = nn.Sequential(
+                    nn.Linear(self.out_dim, 128),
+                    nn.ReLU(),
+                    nn.Linear(128, 128),
+                    nn.ReLU(),
+                    nn.Linear(128, 1),
+                )
+        self.add_pos_conv = nn.Sequential(
+                nn.Conv1d(in_channels = self.out_dim+n_extraFeat, out_channels=self.out_dim, kernel_size=1),
+                nn.ReLU(),
+                nn.Conv1d(in_channels = self.out_dim, out_channels=self.out_dim, kernel_size=1),
+                nn.ReLU(),
+        )
+
+    def forward(self, pe_seq, rna_feat=None, extraFeat=None):
+        # if enhancers_padding_mask is None:
+        enhancers_padding_mask = ~(pe_seq.sum(-1).sum(-1) > 0).bool()
+#         print(enhancers_padding_mask)
+        pe_embed = self.seq_encoder(pe_seq)
+        pe_embed = self.conv_out(pe_embed)
+        pe_flatten_embed = torch.flatten(pe_embed.permute(0, 2, 1, 3), start_dim=2)
+        if extraFeat is not None:
+            pe_flatten_embed = self.add_pos_conv(torch.concat([pe_flatten_embed, extraFeat], axis=-1).permute(0,2,1)).permute(0,2,1)
+        attn_list = []
+        for i in range(self.n_encoder):
+            pe_flatten_embed, attn = self.attn_encoder[i](pe_flatten_embed, enhancers_padding_mask=enhancers_padding_mask, attn_mask=self.attn_mask.to(self.device))
+            attn_list.append(attn.unsqueeze(0))
+        p_embed = torch.flatten(pe_flatten_embed[:,0,:], start_dim=1)
+        if self.useFeat:
+            p_embed = torch.cat([p_embed, rna_feat], dim=-1)
+        p_expr = self.pToExpr(p_embed)
+        return p_expr, torch.cat(attn_list)

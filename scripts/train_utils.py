@@ -484,3 +484,58 @@ def test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_s
     if saved_model_path is not None:
         df.to_csv(saved_model_path + "/fold_" + str(fold_i) + "_"+ model_name + "_predictions.csv")
     return df
+
+
+def orig_test(net, test_ds, fold_i, model_name = None, saved_model_path=None, batch_size=64, device = 'cuda', model_type='best'):
+    testloader = data_utils.DataLoader(test_ds, batch_size=batch_size, pin_memory=True, num_workers=0)
+    # checkpoint = torch.load(saved_model_path + "/fold_" + str(fold_i) + "_"+model_name+"_checkpoint.pt")
+    # net.load_state_dict(checkpoint['model_state_dict'])
+    # except:
+    # net = nn.DataParallel(net, device_ids=[0,1])
+    # net.load_state_dict(checkpoint['model_state_dict'])
+    # net.load_state_dict(torch.load("./K562_10crx_models/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt"))
+    # print("Load the best model from fold_" + str(fold_i) + "_"+model_type+"_"+model_name+"_checkpoint.pt", )
+    if saved_model_path is not None:
+        checkpoint = torch.load(saved_model_path + "/fold_" + str(fold_i) + "_best_"+model_name+"_checkpoint.pt")
+        net.load_state_dict(checkpoint['model_state_dict'])
+        print(model_name,'loaded!')
+        
+    net.eval()
+    with torch.no_grad():
+        preds = []
+        actual = []
+        ensid_list = []
+        for data in tqdm(testloader):
+            input_PE, input_feat, input_dist, y_expr, eid = data
+            input_PE = input_PE.float().to(device)
+            input_feat = input_feat.float().to(device)
+            # input_dist = input_dist.long().to(device)
+            input_dist = input_dist.float().to(device)
+            # input_PEmask = ~(input_PE.sum(-1).sum(-1) > 0).bool().to(device)
+            y_expr = y_expr.float().to(device)
+            # print(input_P.shape, input_E.shape, input_Emask.shape)
+            pred_expr, _ = net(input_PE, input_feat, input_dist)
+
+            outputs = list(pred_expr.flatten().cpu().detach().numpy())
+            labels = list(y_expr.flatten().cpu().detach().numpy())
+
+            preds += outputs
+            actual += labels
+            ensid_list += eid
+
+    slope, intercept, r_value, p_value, std_err = stats.linregress(preds, actual)
+    peasonr, pvalue = stats.pearsonr(preds, actual)
+    mse = mean_squared_error(preds, actual)
+    # print(fold %s test sequence: %0.3f' % (fold_i, r_value**2))
+    print('\nPearson R:', peasonr)
+    sys.stdout.flush()
+    df = pd.DataFrame(index=np.array(ensid_list).flatten())
+    df['Pred'] = preds
+    df['actual'] = actual
+    df['fold_idx'] = fold_i
+
+    pearsonr_we, pvalue = stats.pearsonr(df['Pred'], df['actual'])
+    print('PearsonR:', pearsonr_we)
+    if saved_model_path is not None:
+        df.to_csv(saved_model_path + "/fold_" + str(fold_i) + "_"+ model_name + "_predictions.csv")
+    return df

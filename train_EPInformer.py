@@ -154,7 +154,8 @@ for fi in fold_list:
                                                             events=False, seed=42+int(fi), splits=split_df, fold_i=fold_i)
     
 
-    split_idx[fi] = {'train': train_idx, 'valid': valid_idx, 'test': test_idx}    
+    split_idx[fi] = {'train': train_idx, 'valid': valid_idx, 'test': test_idx, 
+                     'train_ids': [all_ds.event_keys[x] for x in train_idx], 'test_ids': [all_ds.event_keys[x] for x in test_idx]}  
 
     normals = None
     if config.optim.z_score_normalise:
@@ -201,7 +202,7 @@ for fi in fold_list:
 
     test_df = utils.test(model, test_ds, model_name = model.name, saved_model_path=saved_model_path, fold_i=fi, 
                          batch_size=batch_size, normals=normals, device=device, predict=config.base.expr_assay)
-
+                         
 
 if False:
     # plot split distribution y = num samples per set, x = fold

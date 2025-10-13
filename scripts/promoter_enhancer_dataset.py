@@ -343,3 +343,107 @@ class PromoterEnhancerDataset(Dataset):
 
         return {'mean_psi': mean_psi, 'std_psi': std_psi, 
                 'mean_expr': mean_expr, 'std_expr': std_expr}
+
+
+class OrigPromoterEnhancerDataset(Dataset):
+    def __init__(self, data_folder = '/content/drive/MyDrive/EPInformer/github/EPInformer/data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1):
+        self.expr_type = expr_type
+        self.cell_type = cell_type
+        self.data_folder = data_folder
+        self.first_signal = first_signal
+        self.n_enhancers = n_enhancers
+        self.signal_type = signal_type
+        self.n_extraFeat = n_extraFeat
+        self.usePromoterSignal = usePromoterSignal
+        self.distance_threshold = distance_threshold
+        self.hic_threshold = hic_threshold
+        if cell_type == 'K562':
+            # promoter_df = pd.read_csv('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
+            promoter_df = pd.read_csv(self.data_folder + '/K562_DNase_ENCFF257HEE_hic_4DNFITUOMFUQ_1MB_ABC_nominated/DNase_ENCFF257HEE_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
+            promoter_df['PromoterActivity'] = np.sqrt(promoter_df['H3K27ac.RPM.TSS1Kb']*promoter_df['DHS.RPM.TSS1Kb'])
+            self.promoter_df = promoter_df
+            self.data_h5 = h5py.File(self.data_folder + '/K562_DNase_ENCFF257HEE_2kb_4DNFITUOMFUQ_enhancer_promoter_encoding.h5', 'r')
+            # self.data_h5 = h5py.File('/content/drive/MyDrive/EPInformer/EPInformer_activity/data/K562/K562_DNase_ENCFF257HEE_2kb_noCutOff_hic_noFlankSeq_150kb60e_AllPutative_signals_False_v2.h5')
+        elif cell_type == 'GM12878':
+            promoter_df = pd.read_csv(self.data_folder + '/GM12878_DNase_ENCFF020WZB_hic_4DNFI1UEG1HD_1MB_ABC_nominated/DNase_ENCFF020WZB_Neighborhoods/GeneList.txt', sep='\t', index_col='symbol')
+            promoter_df['PromoterActivity'] = np.sqrt(promoter_df['H3K27ac.RPM.TSS1Kb']*promoter_df['DHS.RPM.TSS1Kb'])
+            self.promoter_df = promoter_df 
+            self.data_h5 = h5py.File(self.data_folder + '/GM12878_DNase_ENCFF020WZB_2kb_4DNFI1UEG1HD_promoter_enhancer_encoding.h5', 'r')
+        self.expr_df = pd.read_csv(self.data_folder + '/GM12878_K562_18377_gene_expr_fromXpresso.csv', index_col='ENSID')
+    def __len__(self):
+        return len(self.data_h5['ensid'])
+
+    def __getitem__(self, idx):
+        sample_ensid = self.data_h5['ensid'][idx].decode()
+        seq_code = self.data_h5['pe_code'][idx]
+        enhancer_distance = self.data_h5['distance'][idx,1:]
+        enhancer_intensity = self.data_h5['activity'][idx,1:]
+        enhancer_contact = self.data_h5['hic'][idx,1:]
+
+        if self.signal_type == 'H3K27ac':
+            promoter_activity = self.promoter_df.loc[sample_ensid]['PromoterActivity']
+        elif self.signal_type == 'DNase':
+            promoter_activity = self.promoter_df.loc[sample_ensid]['normalized_dhs']
+            # enhancer_intensity = dhs_intensity
+        promoter_code = seq_code[:1]
+        enhancers_code = seq_code[1:]
+
+        rnaFeat = list(self.expr_df.loc[sample_ensid][['UTR5LEN_log10zscore','CDSLEN_log10zscore','INTRONLEN_log10zscore','UTR3LEN_log10zscore','UTR5GC','CDSGC','UTR3GC', 'ORFEXONDENSITY']].values.astype(float))
+        pe_activity = np.concatenate([[0], enhancer_intensity]).flatten()
+
+        if self.usePromoterSignal and self.n_extraFeat > 1:
+            rnaFeat = np.array(rnaFeat + [promoter_activity])
+        else:
+            rnaFeat = np.array(rnaFeat + [0])
+
+        if self.distance_threshold is not None:
+            enhancer_distance = enhancer_distance.flatten()
+            enhancers_zero = np.zeros_like(enhancers_code)
+            enhancers_zero[abs(enhancer_distance) < self.distance_threshold] = enhancers_code[abs(enhancer_distance) < self.distance_threshold]
+            enhancers_code = enhancers_zero
+
+            enhancer_distance_zero = np.zeros_like(enhancer_distance)
+            enhancer_distance_zero[abs(enhancer_distance) < self.distance_threshold] = enhancer_distance[abs(enhancer_distance) < self.distance_threshold]
+            enhancer_distance = enhancer_distance_zero
+
+        if self.hic_threshold is not None:
+            enhancer_contact = enhancer_contact.flatten()
+            enhancers_zero = np.zeros_like(enhancers_code)
+            enhancers_zero[enhancer_contact > self.hic_threshold] = enhancers_code[enhancer_contact > self.hic_threshold]
+            enhancers_code = enhancers_zero
+
+            enhancer_contact_zero = np.zeros_like(enhancer_contact)
+            enhancer_contact_zero[enhancers_code[enhancer_contact > self.hic_threshold ]] = enhancer_contact[enhancers_code[enhancer_contact > self.hic_threshold]]
+            enhancer_contact = enhancer_contact_zero
+
+        pe_hic = np.concatenate([[0], enhancer_contact]).flatten()
+        pe_hic = np.log10(1+pe_hic)
+        pe_distance = np.concatenate([[0], enhancer_distance/1000]).flatten()
+        # print(pe_distance)
+        if self.n_extraFeat == 1:
+            pe_feat = np.concatenate([pe_distance[:,np.newaxis]],axis=-1)
+        elif self.n_extraFeat == 2:
+            pe_feat = np.concatenate([pe_distance[:,np.newaxis], pe_activity[:,np.newaxis]],axis=-1)
+        elif self.n_extraFeat == 3:
+            pe_feat = np.concatenate([pe_distance[:,np.newaxis], pe_hic[:,np.newaxis], pe_activity[:,np.newaxis], ],axis=-1)
+        else:
+            pe_feat = np.concatenate([pe_distance[:,np.newaxis]],axis=-1)
+
+        promoter_code_tensor = torch.from_numpy(promoter_code).float()
+        pe_feat_tensor = torch.from_numpy(pe_feat[:self.n_enhancers+1])
+        if self.n_extraFeat == 0: # Use promoter only
+            enhancers_code = np.zeros_like(enhancers_code[:self.n_enhancers, :])
+        enhancers_code_tensor = torch.from_numpy(enhancers_code[:self.n_enhancers, :]).float()
+        pe_code_tensor = torch.concat([promoter_code_tensor, enhancers_code_tensor])
+        rnaFeat_tensor = torch.from_numpy(rnaFeat).float()
+        # print(pe_distance_tensor)
+
+        if self.expr_type == 'CAGE':
+            cage_expr = np.log10(self.expr_df.loc[sample_ensid][self.cell_type + '_CAGE_128*3_sum']+1)
+            expr_tensor = torch.from_numpy(np.array([cage_expr])).float()
+        elif self.expr_type == 'RNA':
+            rna_expr = self.expr_df.loc[sample_ensid]['Actual_' + self.cell_type]
+            expr_tensor = torch.from_numpy(np.array([rna_expr])).float()
+        else:
+            assert False, 'label not exists!'
+        return pe_code_tensor, rnaFeat_tensor, pe_feat_tensor, expr_tensor, sample_ensid
