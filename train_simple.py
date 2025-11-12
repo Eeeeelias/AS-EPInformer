@@ -15,7 +15,7 @@ from torch.utils.data import Subset, Dataset
 import scripts.train_utils as reg_utils
 import scripts.train_utils_binary as bin_utils
 import scripts.setup_utils as sp
-from EPInformer.models_multi import ASInformer, ASTransformer, ASLSTM, ASdCNNsmall, ASTrInformer
+from EPInformer.models_multi import ASInformer, ASTransformer, ASLSTM, ASdCNNsmall, ASTrInformer, DeepSplicingCode
 from scripts.pe_utils import plot_loss_curve
 
 
@@ -125,8 +125,10 @@ for fi in fold_list:
                         'include_enhancers': config.optim.enhancer_histones,
                         'rna_seq_source': config.optim.rna_seq_source,
                         'tpm_level': config.optim.tpm_level,
+                        'epigen_bp': False,
+                        'enhancer_bp': False,
                         'use_junctions': True, # doesn't change anything, but they're always on
-                        'junction_length': 400,
+                        'junction_length': config.optim.junction_length,
                         'single_events': config.optim.single_events,
                         'event_genes': config.optim.event_genes}
 
@@ -142,7 +144,7 @@ for fi in fold_list:
     elif config.optim.include_exons:
         train_idx, valid_idx, test_idx = sp.split_binary(all_ds.event_keys, train_frac=0.8, val_frac=0.1,test_frac=0.1, 
                                                          seed=42+int(fi), short_run=config.debug.short_run, 
-                                                         split_simple=False)
+                                                         split_simple=True)
     else:
         train_idx, valid_idx, test_idx = sp.create_set_indices(all_ds, train_ratio=0.8, valid_ratio=0.1,
                                                             events=False, seed=42+int(fi), splits=split_df, fold_i=fold_i)
@@ -157,7 +159,7 @@ for fi in fold_list:
     test_ds = Subset(all_ds, test_idx)
 
     # use a different model
-    model = ASInformer()
+    model = DeepSplicingCode()
     model = model.to(device)
 
     # print number of parameters of the model

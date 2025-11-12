@@ -17,7 +17,7 @@ class PEHistoneDataset(Dataset):
     def __init__(self, data_folder = 'data/', expr_type='CAGE', usePromoterSignal=True, first_signal='distance', signal_type='H3K27ac', 
                  cell_type='K562', distance_threshold=None, hic_threshold=None, n_enhancers=50, n_extraFeat=1,
                  rna_seq_source='xpresso', tpm='gene', single_event_train=False, event_genes=False, include_exons=False,
-                 include_enhancers=True,
+                 include_enhancers=True, junction_length=140,
                  set_exon_zero=False, set_pe_zero=False, set_histones_zero=False, set_extra_feat_zero=False, 
                  set_promoter_zero=False, remove_ar=False, one_tpm_ar=False, **kwargs):
         self.expr_type = expr_type
@@ -38,6 +38,7 @@ class PEHistoneDataset(Dataset):
         self.one_tpm_ar = one_tpm_ar
         self.promoter_dict = {}
         self.data_dict = {}
+        self.junction_length = junction_length
         # ablation test params
         self.zero_out_exons = set_exon_zero
         self.zero_out_pe_data = set_pe_zero
@@ -150,14 +151,15 @@ class PEHistoneDataset(Dataset):
         ex_pad_start = ex_mask.nonzero(as_tuple=True)[0][0] if ex_mask.any() else segment_tensor[1].shape[0]
         in_mask = (segment_tensor[0] == 0).all(dim=1)
         in_pad_start = in_mask.nonzero(as_tuple=True)[0][0] if in_mask.any() else segment_tensor[0].shape[0]
-        junction1 = torch.cat([segment_tensor[0, in_pad_start-200:in_pad_start, :], segment_tensor[1, :0+200, :]], dim=0)
-        junction2 = torch.cat([segment_tensor[1, ex_pad_start-200:ex_pad_start, :], segment_tensor[2, :0+200, :]], dim=0)
+        j_half = self.junction_length // 2
+        junction1 = torch.cat([segment_tensor[0, in_pad_start-j_half:in_pad_start, :], segment_tensor[1, :0+j_half, :]], dim=0)
+        junction2 = torch.cat([segment_tensor[1, ex_pad_start-j_half:ex_pad_start, :], segment_tensor[2, :0+j_half, :]], dim=0)
         # if junctions less than [400, 10], pad first dim with 0
-        if junction1.shape[0] < 400:
-            pad = 400 - junction1.shape[0]
+        if junction1.shape[0] < self.junction_length:
+            pad = self.junction_length - junction1.shape[0]
             junction1 = F.pad(junction1, (0, 0, pad, 0))
-        if junction2.shape[0] < 400:
-            pad = 400 - junction2.shape[0]
+        if junction2.shape[0] < self.junction_length:
+            pad = self.junction_length - junction2.shape[0]
             junction2 = F.pad(junction2, (0, 0, pad, 0))
         segment_tensor = torch.stack([junction1, junction2], dim=0) # 2, 400, 10
         ### END

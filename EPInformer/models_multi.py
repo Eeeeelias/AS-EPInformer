@@ -845,6 +845,62 @@ class ASdCNNsmall(nn.Module):
         return out
 
 
+class DeepSpliceEncoder(nn.Module):
+    def __init__(self, in_channels=4):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv1d(in_channels=in_channels, out_channels=32, kernel_size=7, padding=3),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2),
+            
+            nn.Conv1d(in_channels=32, out_channels=8, kernel_size=4, padding=1),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2),
+            
+            nn.Conv1d(in_channels=8, out_channels=8, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2)
+        )
+
+    def forward(self, x):
+        # input: [batch, seq_len, features] → permute to [batch, features, seq_len]
+        x = x.permute(0, 2, 1)
+        x = self.encoder(x)
+        x = torch.flatten(x, 1)
+        return x
+    
+
+class DeepSplicingCode(nn.Module):
+    def __init__(self, fc_units=64):
+        super().__init__()
+        self.name = "DeepSplicingCode"
+        self.encoder1 = DeepSpliceEncoder(in_channels=4)
+        self.encoder2 = DeepSpliceEncoder(in_channels=4)
+        
+        # Determine flattened encoder output dynamically
+        with torch.no_grad():
+            dummy = torch.zeros(1, 140, 4)
+            encoded = self.encoder1(dummy)
+            encoded_dim = encoded.shape[1]
+        
+        self.fc = nn.Sequential(
+            nn.Linear(encoded_dim * 2, fc_units),
+            nn.ReLU(),
+            nn.Linear(fc_units, 1)
+        )
+
+    def forward(self, x):
+        x = x[:, :, : ,:-7]  # trim epigenetic marks
+        x = x.permute(1, 0, 2, 3)
+        x1 = x[0]
+        x2 = x[1]
+        z1 = self.encoder1(x1)
+        z2 = self.encoder2(x2)
+        z = torch.cat([z1, z2], dim=1)
+        out = self.fc(z)
+        return out  
+
+
 class WeightedLoss(nn.Module):
     """
     Class to compute a weighted loss for the EPInformer model that combines expression, splice binary, 
